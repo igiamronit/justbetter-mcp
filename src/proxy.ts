@@ -3,10 +3,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "./config.js";
 import { connectUpstreams } from "./upstream.js";
+import { indexTools } from "./catalog.js";
 
 async function main() {
   const config = loadConfig("./config.json");
   const upstreams = await connectUpstreams(config);
+
+  // Phase 2: Index all discovered tools into SQLite vector catalog
+  console.error("Initializing semantic catalog...");
+  for (const upstream of upstreams) {
+    await indexTools(upstream.name, upstream.tools);
+  }
 
   const server = new Server(
     { name: "justbetter-mcp", version: "1.0.0" },
