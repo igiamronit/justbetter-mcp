@@ -30,3 +30,5 @@ Thumbs.db
 *.db-journal
 *.db-shm
 *.db-wal
+# Temporary test configs
+tests/test-config.json

@@ -17,6 +17,10 @@ export const ConfigSchema = z.object({
   }).optional(),
   pinnedTools: z.array(z.string()).default([]),  // Tool names always injected regardless of semantic match
   destructiveTools: z.array(z.string()).default([]), // Tools that require explicit user confirmation
+  preconditions: z.record(z.string(), z.object({
+    requiresSecret: z.string().optional(),
+    requiresServer: z.string().optional()
+  })).optional()
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

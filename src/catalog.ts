@@ -42,6 +42,14 @@ try {
   db.exec('ALTER TABLE tools ADD COLUMN is_quarantined INTEGER DEFAULT 0');
 } catch (e) { /* ignore */ }
 
+// Phase 5D: Create session_state table for cross-process concurrency
+db.exec(`
+  CREATE TABLE IF NOT EXISTS session_state (
+    tool_name TEXT PRIMARY KEY,
+    injected_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 const insertToolStmt = db.prepare(`
   INSERT INTO tools (id, server_name, tool_name, description, full_schema_json, fingerprint, is_quarantined)
   VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -174,4 +182,30 @@ export function clearQuarantine(toolName: string, newFingerprint: string): void 
     SET is_quarantined = 0, fingerprint = ? 
     WHERE tool_name = ?
   `).run(newFingerprint, toolName);
+}
+
+// ============================================================================
+// Phase 5D: Hallucination Gate State (Cross-Process Concurrency)
+// ============================================================================
+
+const markInjectedStmt = db.prepare(`
+  INSERT INTO session_state (tool_name, injected_at)
+  VALUES (?, CURRENT_TIMESTAMP)
+  ON CONFLICT(tool_name) DO UPDATE SET
+    injected_at = CURRENT_TIMESTAMP
+`);
+
+export function markToolInjected(toolName: string) {
+  markInjectedStmt.run(toolName);
+}
+
+const checkInjectedStmt = db.prepare(`
+  SELECT 1 FROM session_state 
+  WHERE tool_name = ? 
+  -- Trust expires after 1 hour to prevent stale state bleed across concurrent processes
+  AND injected_at >= datetime('now', '-1 hour')
+`);
+
+export function isToolInjected(toolName: string): boolean {
+  return checkInjectedStmt.get(toolName) !== undefined;
 }

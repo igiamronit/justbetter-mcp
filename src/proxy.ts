@@ -2,15 +2,15 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "./config.js";
-import { indexTools, searchTools } from "./catalog.js";
+import { indexTools, searchTools, markToolInjected } from "./catalog.js";
 import { embed } from "./embeddings.js";
 import { startLlmProxy } from "./llm-proxy.js";
 import { validateToolCall } from "./gates/hallucination.js";
 import { requireUserApproval } from "./gates/approval.js";
-import { markToolInjected } from "./session.js";
 import { resolveGroupedCall } from "./grouping.js";
 import { startDashboard, broadcastEvent } from "./dashboard/server.js";
 import { activeUpstreams, connectAllUpstreams } from "./upstream.js";
+import { passesPreconditions } from "./gates/precondition.js";
 
 const REQUEST_TOOLS_MCP_SCHEMA = {
   name: "request_tools",
@@ -140,11 +140,15 @@ async function main() {
 
       // Return the matching tool schemas so the LLM knows what's available
       const toolDescriptions = results.map(r => {
+        if (!passesPreconditions(r.tool_name, r.server_name, config)) {
+          return null; // Skip returning this tool if it fails preconditions
+        }
+        
         const schema = JSON.parse(r.full_schema_json);
         // Mark each discovered tool as injected so the Hallucination Gate allows calling them
         markToolInjected(r.tool_name);
         return `Tool: ${r.tool_name} (score: ${r.score.toFixed(3)})\nDescription: ${r.description}\nParameters: ${JSON.stringify(schema.inputSchema || schema.parameters, null, 2)}`;
-      }).join('\n\n---\n\n');
+      }).filter(Boolean).join('\n\n---\n\n');
 
       console.error(`[request_tools] Returning ${results.length} tools to LLM (and marking as injectable)`);
 

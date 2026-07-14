@@ -1,6 +1,5 @@
 import _Ajv from 'ajv';
-import { wasToolInjected } from '../session.js';
-import { getToolByName } from '../catalog.js';
+import { getToolByName, isToolInjected } from '../catalog.js';
 
 const Ajv = _Ajv as any;
 const ajv = new Ajv({ strict: false });
@@ -18,7 +17,7 @@ export interface GateResult {
 export function validateToolCall(toolName: string, args: any): GateResult {
   // 1. Hallucination Gate
   // The 'request_tools' tool is always allowed (it's our safety net).
-  if (toolName !== 'request_tools' && !wasToolInjected(toolName)) {
+  if (toolName !== 'request_tools' && toolName !== 'batch_call' && !isToolInjected(toolName)) {
     console.error(`[Hallucination Gate] BLOCKED: LLM hallucinated call to non-injected tool: ${toolName}`);
     return {
       allowed: false,
@@ -26,8 +25,8 @@ export function validateToolCall(toolName: string, args: any): GateResult {
     };
   }
 
-  // 2. Schema Validation Gate (skip for request_tools since it's hardcoded in proxy.ts)
-  if (toolName !== 'request_tools') {
+  // 2. Schema Validation Gate (skip for virtual gateway tools since they are hardcoded in proxy.ts)
+  if (toolName !== 'request_tools' && toolName !== 'batch_call') {
     const tool = getToolByName(toolName);
     if (!tool) {
       return { allowed: false, error: `Tool '${toolName}' does not exist in the catalog.` };

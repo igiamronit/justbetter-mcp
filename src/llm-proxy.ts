@@ -1,10 +1,10 @@
 import express from 'express';
 import { embed } from './embeddings.js';
-import { searchTools, getToolByName, getAllToolSummaries } from './catalog.js';
+import { searchTools, getToolByName, getAllToolSummaries, markToolInjected } from './catalog.js';
 import type { Config } from './config.js';
-
-import { markToolInjected } from './session.js';
+import { serverStatuses } from './upstream.js';
 import { broadcastEvent } from './dashboard/server.js';
+import { passesPreconditions } from './gates/precondition.js';
 
 // The request_tools fallback schema — always injected alongside matched tools
 const REQUEST_TOOLS_SCHEMA = {
@@ -108,6 +108,10 @@ export function startLlmProxy(config: Config) {
 
       // Add semantically matched tools
       for (const match of matchedTools) {
+        if (!passesPreconditions(match.tool_name, match.server_name, config)) {
+          continue; // Skip injecting this tool because preconditions failed
+        }
+        
         const schema = JSON.parse(match.full_schema_json);
         toolSchemas.push({
           type: "function",
@@ -122,6 +126,9 @@ export function startLlmProxy(config: Config) {
         if (!matchedToolNames.has(pinnedName)) {
           const pinnedTool = getToolByName(pinnedName);
           if (pinnedTool) {
+            if (!passesPreconditions(pinnedTool.tool_name, pinnedTool.server_name, config)) {
+              continue; // Skip pinned tool if preconditions fail
+            }
             const schema = JSON.parse(pinnedTool.full_schema_json);
             toolSchemas.push({
               type: "function",
