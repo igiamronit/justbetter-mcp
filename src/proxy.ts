@@ -9,6 +9,7 @@ import { startLlmProxy } from "./llm-proxy.js";
 import { validateToolCall } from "./gates/hallucination.js";
 import { requireUserApproval } from "./gates/approval.js";
 import { markToolInjected } from "./session.js";
+import { resolveGroupedCall } from "./grouping.js";
 
 // The request_tools schema exposed via MCP tools/list
 const REQUEST_TOOLS_MCP_SCHEMA = {
@@ -91,16 +92,15 @@ async function main() {
       };
     }
 
-    // Normal tool call — find which upstream owns this tool
-    const upstream = upstreams.find(u => u.tools.some(t => t.name === toolName));
-
-    if (!upstream) {
-      throw new Error(`Tool ${toolName} not found in any upstream server.`);
-    }
+    // --- Phase 5B Grouping Resolution Seam ---
+    // Translates grouped meta-tools into raw upstream tools. 
+    // If not a group, it acts as a transparent passthrough.
+    const { resolvedToolName, resolvedArgs } = resolveGroupedCall(toolName, request.params.arguments);
 
     // --- Phase 4 Security Gates ---
     
     // 1. Hallucination & Schema Validation Gate
+    // We MUST validate the ORIGINAL toolName (the group), because that's what was injected and what the args match.
     const gateResult = validateToolCall(toolName, request.params.arguments);
     if (!gateResult.allowed) {
       return {
@@ -110,8 +110,9 @@ async function main() {
     }
 
     // 2. Human-in-the-Loop Confirmation Gate
-    if (config.destructiveTools && config.destructiveTools.includes(toolName)) {
-      const approved = await requireUserApproval(toolName, request.params.arguments);
+    // We MUST check the RESOLVED tool name, so hidden underlying destructive tools trigger approval.
+    if (config.destructiveTools && config.destructiveTools.includes(resolvedToolName)) {
+      const approved = await requireUserApproval(resolvedToolName, resolvedArgs);
       if (!approved) {
         return {
           content: [{ type: "text", text: "Error: Execution denied by user in the terminal." }],
@@ -120,10 +121,17 @@ async function main() {
       }
     }
 
+    // Normal tool call — find which upstream owns the RESOLVED tool
+    const upstream = upstreams.find(u => u.tools.some(t => t.name === resolvedToolName));
+
+    if (!upstream) {
+      throw new Error(`Tool ${resolvedToolName} not found in any upstream server.`);
+    }
+
     // Forward the call to the upstream server
     const result = await upstream.client.callTool({
-      name: toolName,
-      arguments: request.params.arguments,
+      name: resolvedToolName,
+      arguments: resolvedArgs,
     });
 
     return result;
