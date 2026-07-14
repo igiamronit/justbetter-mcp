@@ -4,6 +4,7 @@ import { searchTools, getToolByName, getAllToolSummaries } from './catalog.js';
 import type { Config } from './config.js';
 
 import { markToolInjected } from './session.js';
+import { broadcastEvent } from './dashboard/server.js';
 
 // The request_tools fallback schema — always injected alongside matched tools
 const REQUEST_TOOLS_SCHEMA = {
@@ -66,6 +67,14 @@ export function startLlmProxy(config: Config) {
       console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
       matchedTools.forEach(t => {
         console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
+      });
+
+      broadcastEvent({
+        type: 'discovery_trace',
+        prompt: userPrompt,
+        matchedTools: matchedTools.map(t => ({ name: t.tool_name, score: t.score })),
+        tokensSaved: Math.max(0, 15000 - (matchedTools.length * 400)),
+        isFallback: false
       });
 
       // Step 4: Build the tools array to inject
@@ -205,8 +214,10 @@ export function startLlmProxy(config: Config) {
     }
   });
 
-  app.listen(llmConfig.port, () => {
+  const server = app.listen(llmConfig.port, () => {
     console.error(`[LLM Proxy] Listening on http://localhost:${llmConfig.port}/v1`);
     console.error(`[LLM Proxy] Forwarding to ${llmConfig.realApiBase}`);
   });
+
+  return server;
 }

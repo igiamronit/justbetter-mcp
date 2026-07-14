@@ -25,3 +25,8 @@ reference/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# SQLite temporary files
+*.db-journal
+*.db-shm
+*.db-wal

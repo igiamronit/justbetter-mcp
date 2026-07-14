@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JustBetter MCP Gateway</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>MCP Gateway</h1>
+            <nav>
+                <button class="nav-btn active" data-tab="servers">Servers</button>
+                <button class="nav-btn" data-tab="tools">Tools</button>
+                <button class="nav-btn" data-tab="trace">Live Trace</button>
+            </nav>
+        </header>
+
+        <main>
+            <!-- Servers Tab -->
+            <section id="servers" class="tab-content active">
+                <h2>Connected Upstream Servers</h2>
+                <table id="servers-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Command</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+                <div class="form-group">
+                    <input type="text" id="new-server-name" placeholder="Server Name (e.g. filesystem)">
+                    <input type="text" id="new-server-cmd" placeholder="Command (e.g. npx @modelcontextprotocol/server-filesystem .)">
+                    <button id="add-server-btn">Add Server</button>
+                </div>
+            </section>
+
+            <!-- Tools Tab -->
+            <section id="tools" class="tab-content">
+                <h2>Tool Explorer</h2>
+                <div class="search-bar">
+                    <input type="text" id="tool-search" placeholder="Search tools...">
+                </div>
+                <table id="tools-table">
+                    <thead>
+                        <tr>
+                            <th>Tool Name</th>
+                            <th>Server</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- Live Trace Tab -->
+            <section id="trace" class="tab-content">
+                <h2>Discovery Trace (Live)</h2>
+                <p class="subtitle">Real-time semantic routing and tool injection events.</p>
+                <div id="trace-feed" class="trace-feed">
+                    <!-- Populated by WebSockets -->
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 
 export const ConfigSchema = z.object({
   upstreamServers: z.array(
@@ -31,4 +31,10 @@ export function loadConfig(path: string): Config {
   }
   
   return config;
+}
+
+export function saveConfig(path: string, config: Config): void {
+  // Strip out llmProxy overrides (like port from ENV) if necessary, 
+  // but to keep it simple we just serialize the whole validated config object.
+  writeFileSync(path, JSON.stringify(config, null, 2), "utf-8");
 }

@@ -2,7 +2,6 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "./config.js";
-import { connectUpstreams } from "./upstream.js";
 import { indexTools, searchTools } from "./catalog.js";
 import { embed } from "./embeddings.js";
 import { startLlmProxy } from "./llm-proxy.js";
@@ -10,6 +9,8 @@ import { validateToolCall } from "./gates/hallucination.js";
 import { requireUserApproval } from "./gates/approval.js";
 import { markToolInjected } from "./session.js";
 import { resolveGroupedCall } from "./grouping.js";
+import { startDashboard, broadcastEvent } from "./dashboard/server.js";
+import { activeUpstreams, connectAllUpstreams } from "./upstream.js";
 
 // The request_tools schema exposed via MCP tools/list
 const REQUEST_TOOLS_MCP_SCHEMA = {
@@ -28,17 +29,17 @@ const REQUEST_TOOLS_MCP_SCHEMA = {
 };
 
 async function main() {
-  const config = loadConfig("./config.json");
-  const upstreams = await connectUpstreams(config);
-
-  // Phase 2: Index all discovered tools into SQLite vector catalog
-  console.error("Initializing semantic catalog...");
-  for (const upstream of upstreams) {
-    await indexTools(upstream.name, upstream.tools);
-  }
+  const configPath = process.argv[2] || "config.json";
+  
+  // 1. Boot the Dashboard FIRST so it's always accessible
+  const dashboardServer = startDashboard(configPath);
+  
+  // 2. Load config and connect to upstreams (soft-failing on errors)
+  const config = loadConfig(configPath);
+  await connectAllUpstreams(config);
 
   // Phase 3: Start the LLM API Proxy (if configured)
-  startLlmProxy(config);
+  const llmProxyServer = startLlmProxy(config);
 
   const server = new Server(
     { name: "justbetter-mcp", version: "1.0.0" },
@@ -87,6 +88,14 @@ async function main() {
 
       console.error(`[request_tools] Returning ${results.length} tools to LLM (and marking as injectable)`);
 
+      broadcastEvent({
+        type: 'discovery_trace',
+        prompt: `Fallback request: "${query}"`,
+        matchedTools: results.map(r => ({ name: r.tool_name, score: r.score })),
+        tokensSaved: 0,
+        isFallback: true
+      });
+
       return {
         content: [{ type: "text", text: `Found ${results.length} matching tools:\n\n${toolDescriptions}` }],
       };
@@ -122,7 +131,7 @@ async function main() {
     }
 
     // Normal tool call — find which upstream owns the RESOLVED tool
-    const upstream = upstreams.find(u => u.tools.some(t => t.name === resolvedToolName));
+    const upstream = activeUpstreams.find(u => u.tools.some(t => t.name === resolvedToolName));
 
     if (!upstream) {
       throw new Error(`Tool ${resolvedToolName} not found in any upstream server.`);
@@ -136,6 +145,26 @@ async function main() {
 
     return result;
   });
+
+  // Handle graceful shutdown
+  const cleanup = async () => {
+    console.error("\n[Proxy] Shutting down gracefully...");
+    try { await server.close(); } catch (e) {}
+    if (dashboardServer) dashboardServer.close();
+    if (llmProxyServer) llmProxyServer.close();
+    
+    // Close upstream clients (which terminates their child processes via the SDK)
+    for (const u of activeUpstreams) {
+      try { await u.client.close(); } catch (e) {}
+    }
+    
+    process.exit(0);
+  };
+
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+  process.stdin.on('close', cleanup);
+  process.stdin.on('end', cleanup);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

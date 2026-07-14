@@ -156,3 +156,22 @@ export function getAllToolSummaries(): string {
   const rows = db.prepare(`SELECT tool_name, description FROM tools`).all() as any[];
   return rows.map(r => `- ${r.tool_name}: ${(r.description || '').split('\n')[0]}`).join('\n');
 }
+
+/**
+ * Returns all indexed tools including their quarantine status.
+ * Used by the Dashboard Tool Explorer.
+ */
+export function getAllTools(): any[] {
+  return db.prepare(`SELECT * FROM tools ORDER BY server_name ASC, tool_name ASC`).all();
+}
+
+/**
+ * Approves a quarantined tool by updating its stored fingerprint and unsetting the is_quarantined flag.
+ */
+export function clearQuarantine(toolName: string, newFingerprint: string): void {
+  db.prepare(`
+    UPDATE tools 
+    SET is_quarantined = 0, fingerprint = ? 
+    WHERE tool_name = ?
+  `).run(newFingerprint, toolName);
+}
