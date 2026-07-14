@@ -9,7 +9,13 @@ export const ConfigSchema = z.object({
       args: z.array(z.string()).default([]),
       env: z.record(z.string(), z.string()).optional(),
     })
-  )
+  ),
+  llmProxy: z.object({
+    port: z.number().default(4141),
+    realApiBase: z.string(),       // e.g. "https://api.openai.com/v1"
+    realApiKey: z.string(),        // The real API key to forward requests with
+  }).optional(),
+  pinnedTools: z.array(z.string()).default([]),  // Tool names always injected regardless of semantic match
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

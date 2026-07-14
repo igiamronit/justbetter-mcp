@@ -113,3 +113,29 @@ export function searchTools(queryVector: Float32Array, threshold: number = 0.28,
       score: r.score
     }));
 }
+
+/**
+ * Look up a single tool by its tool_name (e.g., "read_file").
+ * Used for pinned tool injection.
+ */
+export function getToolByName(toolName: string): IndexedTool | undefined {
+  const row = db.prepare(`SELECT * FROM tools WHERE tool_name = ?`).get(toolName) as any;
+  if (!row) return undefined;
+  return {
+    id: row.id,
+    server_name: row.server_name,
+    tool_name: row.tool_name,
+    description: row.description,
+    full_schema_json: row.full_schema_json,
+    fingerprint: row.fingerprint
+  };
+}
+
+/**
+ * Returns a compact summary of all indexed tools: "tool_name: first line of description"
+ * Used for the summary pool system message.
+ */
+export function getAllToolSummaries(): string {
+  const rows = db.prepare(`SELECT tool_name, description FROM tools`).all() as any[];
+  return rows.map(r => `- ${r.tool_name}: ${(r.description || '').split('\n')[0]}`).join('\n');
+}

@@ -5,5 +5,11 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
     }
-  ]
+  ],
+  "llmProxy": {
+    "port": 4141,
+    "realApiBase": "https://api.openai.com/v1",
+    "realApiKey": "sk-YOUR-REAL-API-KEY-HERE"
+  },
+  "pinnedTools": []
 }
