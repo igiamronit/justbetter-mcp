@@ -6,6 +6,9 @@ import { connectUpstreams } from "./upstream.js";
 import { indexTools, searchTools } from "./catalog.js";
 import { embed } from "./embeddings.js";
 import { startLlmProxy } from "./llm-proxy.js";
+import { validateToolCall } from "./gates/hallucination.js";
+import { requireUserApproval } from "./gates/approval.js";
+import { markToolInjected } from "./session.js";
 
 // The request_tools schema exposed via MCP tools/list
 const REQUEST_TOOLS_MCP_SCHEMA = {
@@ -76,10 +79,12 @@ async function main() {
       // Return the matching tool schemas so the LLM knows what's available
       const toolDescriptions = results.map(r => {
         const schema = JSON.parse(r.full_schema_json);
+        // Mark each discovered tool as injected so the Hallucination Gate allows calling them
+        markToolInjected(r.tool_name);
         return `Tool: ${r.tool_name} (score: ${r.score.toFixed(3)})\nDescription: ${r.description}\nParameters: ${JSON.stringify(schema.inputSchema || schema.parameters, null, 2)}`;
       }).join('\n\n---\n\n');
 
-      console.error(`[request_tools] Returning ${results.length} tools to LLM`);
+      console.error(`[request_tools] Returning ${results.length} tools to LLM (and marking as injectable)`);
 
       return {
         content: [{ type: "text", text: `Found ${results.length} matching tools:\n\n${toolDescriptions}` }],
@@ -91,6 +96,28 @@ async function main() {
 
     if (!upstream) {
       throw new Error(`Tool ${toolName} not found in any upstream server.`);
+    }
+
+    // --- Phase 4 Security Gates ---
+    
+    // 1. Hallucination & Schema Validation Gate
+    const gateResult = validateToolCall(toolName, request.params.arguments);
+    if (!gateResult.allowed) {
+      return {
+        content: [{ type: "text", text: `Error: ${gateResult.error}` }],
+        isError: true,
+      };
+    }
+
+    // 2. Human-in-the-Loop Confirmation Gate
+    if (config.destructiveTools && config.destructiveTools.includes(toolName)) {
+      const approved = await requireUserApproval(toolName, request.params.arguments);
+      if (!approved) {
+        return {
+          content: [{ type: "text", text: "Error: Execution denied by user in the terminal." }],
+          isError: true,
+        };
+      }
     }
 
     // Forward the call to the upstream server

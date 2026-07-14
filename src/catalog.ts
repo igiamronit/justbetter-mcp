@@ -26,7 +26,8 @@ db.exec(`
     tool_name TEXT,
     description TEXT,
     full_schema_json TEXT,
-    fingerprint TEXT
+    fingerprint TEXT,
+    is_quarantined INTEGER DEFAULT 0
   );
   
   -- Create virtual table for sqlite-vec vector search
@@ -36,13 +37,19 @@ db.exec(`
   );
 `);
 
+// Add column if it doesn't exist (for backward compatibility with Phase 2)
+try {
+  db.exec('ALTER TABLE tools ADD COLUMN is_quarantined INTEGER DEFAULT 0');
+} catch (e) { /* ignore */ }
+
 const insertToolStmt = db.prepare(`
-  INSERT INTO tools (id, server_name, tool_name, description, full_schema_json, fingerprint)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO tools (id, server_name, tool_name, description, full_schema_json, fingerprint, is_quarantined)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     description = excluded.description,
     full_schema_json = excluded.full_schema_json,
-    fingerprint = excluded.fingerprint
+    fingerprint = excluded.fingerprint,
+    is_quarantined = excluded.is_quarantined
 `);
 
 const insertVecStmt = db.prepare(`
@@ -62,6 +69,14 @@ export async function indexTools(serverName: string, tools: any[]) {
     // Hash for fingerprinting
     const fingerprint = createHash('sha256').update(fullSchemaJson).digest('hex');
 
+    // Quarantine Check
+    const existingTool = db.prepare('SELECT fingerprint FROM tools WHERE id = ?').get(id) as any;
+    let isQuarantined = 0;
+    if (existingTool && existingTool.fingerprint !== fingerprint) {
+      isQuarantined = 1;
+      console.error(`\n⚠️  WARNING: Schema for tool '${tool.name}' has changed! It has been quarantined for safety.\n`);
+    }
+
     // Generate semantic embedding vector
     const textToEmbed = `${tool.name} ${description}`;
     const vector = await embed(textToEmbed);
@@ -70,7 +85,7 @@ export async function indexTools(serverName: string, tools: any[]) {
     const embeddingBuffer = Buffer.from(vector.buffer);
 
     db.transaction(() => {
-      insertToolStmt.run(id, serverName, tool.name, description, fullSchemaJson, fingerprint);
+      insertToolStmt.run(id, serverName, tool.name, description, fullSchemaJson, fingerprint, isQuarantined);
       // Remove old vector to avoid constraint failure
       db.prepare('DELETE FROM vec_tools WHERE id = ?').run(id);
       insertVecStmt.run(id, embeddingBuffer);
@@ -86,6 +101,7 @@ export async function indexTools(serverName: string, tools: any[]) {
  * Searches the catalog for tools that match the query intent.
  * Implements Dynamic Thresholding: retrieves a wide topK, but strictly filters
  * out any tools that fall below the semantic similarity threshold.
+ * Quarantined tools are completely ignored.
  */
 export function searchTools(queryVector: Float32Array, threshold: number = 0.28, topK: number = 15): SearchResult[] {
   const queryBuffer = Buffer.from(queryVector.buffer);
@@ -96,6 +112,7 @@ export function searchTools(queryVector: Float32Array, threshold: number = 0.28,
     SELECT t.*, (1.0 - vec_distance_cosine(v.embedding, ?)) as score
     FROM vec_tools v
     JOIN tools t ON v.id = t.id
+    WHERE t.is_quarantined = 0
     ORDER BY score DESC
     LIMIT ?
   `).all(queryBuffer, topK) as any[];

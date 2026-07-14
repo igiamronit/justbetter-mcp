@@ -13,6 +13,7 @@
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "ajv": "^8.20.0",
     "better-sqlite3": "^12.11.1",
     "express": "^5.2.1",
     "sqlite-vec": "^0.1.9",

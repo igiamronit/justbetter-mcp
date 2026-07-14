@@ -3,6 +3,8 @@ import { embed } from './embeddings.js';
 import { searchTools, getToolByName, getAllToolSummaries } from './catalog.js';
 import type { Config } from './config.js';
 
+import { markToolInjected } from './session.js';
+
 // The request_tools fallback schema — always injected alongside matched tools
 const REQUEST_TOOLS_SCHEMA = {
   type: "function" as const,
@@ -76,6 +78,7 @@ export function startLlmProxy(config: Config) {
           type: "function",
           function: schema
         });
+        markToolInjected(match.tool_name);
       }
 
       // Add pinned tools (if not already matched)
@@ -89,6 +92,7 @@ export function startLlmProxy(config: Config) {
               type: "function",
               function: schema
             });
+            markToolInjected(pinnedTool.tool_name);
             console.error(`  + ${pinnedName} (pinned)`);
           }
         }
@@ -96,6 +100,7 @@ export function startLlmProxy(config: Config) {
 
       // Always add the request_tools fallback
       toolSchemas.push(REQUEST_TOOLS_SCHEMA);
+      markToolInjected('request_tools');
 
       // Step 5: Inject tools into the request body
       body.tools = toolSchemas;

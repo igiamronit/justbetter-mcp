@@ -16,6 +16,7 @@ export const ConfigSchema = z.object({
     realApiKey: z.string(),        // The real API key to forward requests with
   }).optional(),
   pinnedTools: z.array(z.string()).default([]),  // Tool names always injected regardless of semantic match
+  destructiveTools: z.array(z.string()).default([]), // Tools that require explicit user confirmation
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -23,5 +24,11 @@ export type Config = z.infer<typeof ConfigSchema>;
 export function loadConfig(path: string): Config {
   const fileContent = readFileSync(path, "utf-8");
   const json = JSON.parse(fileContent);
-  return ConfigSchema.parse(json);
+  const config = ConfigSchema.parse(json);
+  
+  if (config.llmProxy && process.env.LLM_PORT) {
+    config.llmProxy.port = parseInt(process.env.LLM_PORT, 10);
+  }
+  
+  return config;
 }
