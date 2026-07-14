@@ -25,6 +25,32 @@ const REQUEST_TOOLS_SCHEMA = {
   }
 };
 
+const BATCH_CALL_SCHEMA = {
+  type: "function" as const,
+  function: {
+    name: "batch_call",
+    description: "Execute multiple tools sequentially in a single turn to save time.",
+    parameters: {
+      type: "object",
+      properties: {
+        calls: {
+          type: "array",
+          description: "List of tools to execute",
+          items: {
+            type: "object",
+            properties: {
+              tool: { type: "string" },
+              args: { type: "object" }
+            },
+            required: ["tool", "args"]
+          }
+        }
+      },
+      required: ["calls"]
+    }
+  }
+};
+
 /**
  * Starts the LLM API Proxy on the configured port.
  * This server intercepts OpenAI-compatible chat completion requests,
@@ -107,9 +133,12 @@ export function startLlmProxy(config: Config) {
         }
       }
 
-      // Always add the request_tools fallback
+      // Always add the request_tools and batch_call fallbacks
       toolSchemas.push(REQUEST_TOOLS_SCHEMA);
       markToolInjected('request_tools');
+      
+      toolSchemas.push(BATCH_CALL_SCHEMA);
+      markToolInjected('batch_call');
 
       // Step 5: Inject tools into the request body
       body.tools = toolSchemas;

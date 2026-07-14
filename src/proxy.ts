@@ -12,7 +12,6 @@ import { resolveGroupedCall } from "./grouping.js";
 import { startDashboard, broadcastEvent } from "./dashboard/server.js";
 import { activeUpstreams, connectAllUpstreams } from "./upstream.js";
 
-// The request_tools schema exposed via MCP tools/list
 const REQUEST_TOOLS_MCP_SCHEMA = {
   name: "request_tools",
   description: "If none of your current tools can fulfill the user's request, call this with a precise description of what capability you need. The system will search for and provide matching tools.",
@@ -27,6 +26,67 @@ const REQUEST_TOOLS_MCP_SCHEMA = {
     required: ["query"]
   }
 };
+
+const BATCH_CALL_MCP_SCHEMA = {
+  name: "batch_call",
+  description: "Execute multiple tools sequentially in a single turn to save time.",
+  inputSchema: {
+    type: "object" as const,
+    properties: {
+      calls: {
+        type: "array",
+        description: "List of tools to execute",
+        items: {
+          type: "object",
+          properties: {
+            tool: { type: "string" },
+            args: { type: "object" }
+          },
+          required: ["tool", "args"]
+        }
+      }
+    },
+    required: ["calls"]
+  }
+};
+
+/**
+ * Executes a single tool call through the full security and dispatch pipeline.
+ * This is used for both standard calls and sub-calls inside a batch_call.
+ */
+async function executeSingleTool(toolName: string, args: any, config: any) {
+  // --- Phase 5B Grouping Resolution Seam ---
+  const { resolvedToolName, resolvedArgs } = resolveGroupedCall(toolName, args);
+
+  // --- Phase 4 Security Gates ---
+  const gateResult = validateToolCall(toolName, args);
+  if (!gateResult.allowed) {
+    return {
+      content: [{ type: "text", text: `Error: ${gateResult.error}` }],
+      isError: true,
+    };
+  }
+
+  if (config.destructiveTools && config.destructiveTools.includes(resolvedToolName)) {
+    const approved = await requireUserApproval(resolvedToolName, resolvedArgs);
+    if (!approved) {
+      return {
+        content: [{ type: "text", text: "Error: Execution denied by user in the terminal." }],
+        isError: true,
+      };
+    }
+  }
+
+  const upstream = activeUpstreams.find(u => u.tools.some(t => t.name === resolvedToolName));
+  if (!upstream) {
+    throw new Error(`Tool ${resolvedToolName} not found in any upstream server.`);
+  }
+
+  return await upstream.client.callTool({
+    name: resolvedToolName,
+    arguments: resolvedArgs,
+  });
+}
 
 async function main() {
   const configPath = process.argv[2] || "config.json";
@@ -50,7 +110,7 @@ async function main() {
   // The LLM API Proxy handles injecting the real tool schemas dynamically.
   // This keeps the MCP client's static tool list minimal.
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: [REQUEST_TOOLS_MCP_SCHEMA] };
+    return { tools: [REQUEST_TOOLS_MCP_SCHEMA, BATCH_CALL_MCP_SCHEMA] };
   });
 
   // Phase 3: Forward tool calls to the correct upstream, with request_tools fallback
@@ -101,49 +161,44 @@ async function main() {
       };
     }
 
-    // --- Phase 5B Grouping Resolution Seam ---
-    // Translates grouped meta-tools into raw upstream tools. 
-    // If not a group, it acts as a transparent passthrough.
-    const { resolvedToolName, resolvedArgs } = resolveGroupedCall(toolName, request.params.arguments);
+    // Handle the batch_call loop
+    if (toolName === "batch_call") {
+      const calls = (request.params.arguments as any)?.calls || [];
+      if (!Array.isArray(calls)) {
+        return { content: [{ type: "text", text: "Error: 'calls' must be an array." }], isError: true };
+      }
 
-    // --- Phase 4 Security Gates ---
-    
-    // 1. Hallucination & Schema Validation Gate
-    // We MUST validate the ORIGINAL toolName (the group), because that's what was injected and what the args match.
-    const gateResult = validateToolCall(toolName, request.params.arguments);
-    if (!gateResult.allowed) {
+      console.error(`[batch_call] Executing ${calls.length} batched tools...`);
+      const results = [];
+      for (let i = 0; i < calls.length; i++) {
+        const call = calls[i];
+        try {
+          console.error(`  - Step ${i + 1}/${calls.length}: ${call.tool}`);
+          const res = await executeSingleTool(call.tool, call.args, config);
+          
+          if (res.isError) {
+            const errorText = (res as any).content?.[0]?.text || "Unknown error";
+            console.error(`  - Step ${i + 1}/${calls.length}: ${call.tool} FAILED: ${errorText}`);
+            results.push({ tool: call.tool, status: "error", error: errorText });
+            break; // Stop execution on first failure to prevent cascading errors
+          }
+          
+          results.push({ tool: call.tool, status: "success", result: res });
+        } catch (err: any) {
+          console.error(`  - Step ${i + 1}/${calls.length}: ${call.tool} FAILED: ${err.message}`);
+          results.push({ tool: call.tool, status: "error", error: err.message });
+          // Stop execution on first failure to prevent cascading errors
+          break;
+        }
+      }
+
       return {
-        content: [{ type: "text", text: `Error: ${gateResult.error}` }],
-        isError: true,
+        content: [{ type: "text", text: JSON.stringify(results, null, 2) }]
       };
     }
 
-    // 2. Human-in-the-Loop Confirmation Gate
-    // We MUST check the RESOLVED tool name, so hidden underlying destructive tools trigger approval.
-    if (config.destructiveTools && config.destructiveTools.includes(resolvedToolName)) {
-      const approved = await requireUserApproval(resolvedToolName, resolvedArgs);
-      if (!approved) {
-        return {
-          content: [{ type: "text", text: "Error: Execution denied by user in the terminal." }],
-          isError: true,
-        };
-      }
-    }
-
-    // Normal tool call — find which upstream owns the RESOLVED tool
-    const upstream = activeUpstreams.find(u => u.tools.some(t => t.name === resolvedToolName));
-
-    if (!upstream) {
-      throw new Error(`Tool ${resolvedToolName} not found in any upstream server.`);
-    }
-
-    // Forward the call to the upstream server
-    const result = await upstream.client.callTool({
-      name: resolvedToolName,
-      arguments: resolvedArgs,
-    });
-
-    return result;
+    // Normal single tool execution
+    return await executeSingleTool(toolName, request.params.arguments, config);
   });
 
   // Handle graceful shutdown
