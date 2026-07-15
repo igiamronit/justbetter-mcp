@@ -124,6 +124,15 @@ export function startDashboard(configPath: string) {
   });
 
   const port = process.env.DASHBOARD_PORT ? parseInt(process.env.DASHBOARD_PORT, 10) : 4040;
+  
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n[Dashboard] Port ${port} is already in use. Assuming Dashboard is already running in another instance.`);
+    } else {
+      console.error(`\n[Dashboard] Error: ${err.message}`);
+    }
+  });
+
   server.listen(port, () => {
     console.error(`\n[Dashboard] Local management UI running on http://localhost:${port}`);
   });

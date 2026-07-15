@@ -290,5 +290,13 @@ Reference files by absolute path. No filler text before tool calls.`;
     console.error(`[LLM Proxy] Forwarding to ${llmConfig.realApiBase}`);
   });
 
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[LLM Proxy] Port ${llmConfig.port} is already in use. Assuming LLM Proxy is already running in another instance.`);
+    } else {
+      console.error(`[LLM Proxy] Error: ${err.message}`);
+    }
+  });
+
   return server;
 }
