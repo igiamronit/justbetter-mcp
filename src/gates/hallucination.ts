@@ -1,5 +1,6 @@
 import _Ajv from 'ajv';
 import { getToolByName, isToolInjected } from '../catalog.js';
+import { activeUpstreams } from '../upstream.js';
 
 const Ajv = _Ajv as any;
 const ajv = new Ajv({ strict: false });
@@ -27,7 +28,8 @@ export function validateToolCall(toolName: string, args: any): GateResult {
 
   // 2. Schema Validation Gate (skip for virtual gateway tools since they are hardcoded in proxy.ts)
   if (toolName !== 'request_tools' && toolName !== 'batch_call') {
-    const tool = getToolByName(toolName);
+    const connectedServers = activeUpstreams.map(u => u.name);
+    const tool = getToolByName(toolName, connectedServers);
     if (!tool) {
       return { allowed: false, error: `Tool '${toolName}' does not exist in the catalog.` };
     }

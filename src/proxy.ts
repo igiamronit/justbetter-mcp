@@ -12,6 +12,12 @@ import { startDashboard, broadcastEvent } from "./dashboard/server.js";
 import { activeUpstreams, connectAllUpstreams } from "./upstream.js";
 import { passesPreconditions } from "./gates/precondition.js";
 
+// Silence background logs if running under the TUI
+if (process.env.SILENCE_LOGS === "1") {
+  console.log = () => {};
+  console.error = () => {};
+}
+
 const REQUEST_TOOLS_MCP_SCHEMA = {
   name: "request_tools",
   description: "If none of your current tools can fulfill the user's request, call this with a precise description of what capability you need. The system will search for and provide matching tools.",
@@ -82,10 +88,15 @@ async function executeSingleTool(toolName: string, args: any, config: any) {
     throw new Error(`Tool ${resolvedToolName} not found in any upstream server.`);
   }
 
-  return await upstream.client.callTool({
-    name: resolvedToolName,
-    arguments: resolvedArgs,
-  });
+  try {
+    return await upstream.client.callTool({
+      name: resolvedToolName,
+      arguments: resolvedArgs
+    });
+  } catch (e: any) {
+    console.error(`[executeSingleTool Error] Tool: ${resolvedToolName}`, e.stack || e);
+    throw e;
+  }
 }
 
 async function main() {
@@ -130,7 +141,8 @@ async function main() {
 
       // Embed the LLM's refined query and search with a wider net (lower threshold)
       const queryVector = await embed(query);
-      const results = searchTools(queryVector, 0.15, 10);
+      const connectedServers = activeUpstreams.map(u => u.name);
+      const results = searchTools(queryVector, connectedServers, 0.15, 10);
 
       if (results.length === 0) {
         return {

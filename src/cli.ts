@@ -152,8 +152,8 @@ async function start() {
   
   // 1. Boot the gateway as a background process via MCP stdio
   const transport = new StdioClientTransport({
-    command: "npx",
-    args: ["tsx", "src/proxy.ts", configPath],
+    command: process.execPath,
+    args: ["node_modules/tsx/dist/cli.mjs", "src/proxy.ts", configPath],
     env: process.env as Record<string, string> // Inherit env vars (secrets, etc)
   });
 
