@@ -113,8 +113,10 @@ export async function indexTools(serverName: string, tools: any[]) {
  * out any tools that fall below the semantic similarity threshold.
  * Quarantined tools are completely ignored.
  */
-export function searchTools(queryVector: Float32Array, threshold: number = 0.28, topK: number = 15): SearchResult[] {
+export function searchTools(queryVector: Float32Array, connectedServers: string[], threshold: number = 0.28, topK: number = 15): SearchResult[] {
+  if (connectedServers.length === 0) return [];
   const queryBuffer = Buffer.from(queryVector.buffer);
+  const placeholders = connectedServers.map(() => '?').join(',');
   
   // vec_distance_cosine returns cosine distance (0 means identical, 2 means completely opposite).
   // Similarity is (1 - distance).
@@ -122,10 +124,10 @@ export function searchTools(queryVector: Float32Array, threshold: number = 0.28,
     SELECT t.*, (1.0 - vec_distance_cosine(v.embedding, ?)) as score
     FROM vec_tools v
     JOIN tools t ON v.id = t.id
-    WHERE t.is_quarantined = 0
+    WHERE t.is_quarantined = 0 AND t.server_name IN (${placeholders})
     ORDER BY score DESC
     LIMIT ?
-  `).all(queryBuffer, topK) as any[];
+  `).all(queryBuffer, ...connectedServers, topK) as any[];
 
   // Dynamic Threshold Filter
   return results
@@ -145,8 +147,10 @@ export function searchTools(queryVector: Float32Array, threshold: number = 0.28,
  * Look up a single tool by its tool_name (e.g., "read_file").
  * Used for pinned tool injection.
  */
-export function getToolByName(toolName: string): IndexedTool | undefined {
-  const row = db.prepare(`SELECT * FROM tools WHERE tool_name = ?`).get(toolName) as any;
+export function getToolByName(toolName: string, connectedServers: string[]): IndexedTool | undefined {
+  if (connectedServers.length === 0) return undefined;
+  const placeholders = connectedServers.map(() => '?').join(',');
+  const row = db.prepare(`SELECT * FROM tools WHERE tool_name = ? AND server_name IN (${placeholders})`).get(toolName, ...connectedServers) as any;
   if (!row) return undefined;
   return {
     id: row.id,
@@ -162,8 +166,10 @@ export function getToolByName(toolName: string): IndexedTool | undefined {
  * Returns a compact summary of all indexed tools: "tool_name: first line of description"
  * Used for the summary pool system message.
  */
-export function getAllToolSummaries(): string {
-  const rows = db.prepare(`SELECT tool_name, description FROM tools`).all() as any[];
+export function getAllToolSummaries(connectedServers: string[]): string {
+  if (connectedServers.length === 0) return '';
+  const placeholders = connectedServers.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT tool_name, description FROM tools WHERE server_name IN (${placeholders})`).all(...connectedServers) as any[];
   return rows.map(r => `- ${r.tool_name}: ${(r.description || '').split('\n')[0]}`).join('\n');
 }
 

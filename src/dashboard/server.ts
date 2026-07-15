@@ -76,8 +76,11 @@ export function startDashboard(configPath: string) {
     const config = loadConfig(configPath);
     const tools = getAllTools();
     
+    // Filter out tools from disconnected servers
+    const activeTools = tools.filter(t => serverStatuses[t.server_name] === 'connected');
+    
     // Map in the pinned/destructive statuses from config
-    const enhancedTools = tools.map((t: any) => ({
+    const enhancedTools = activeTools.map((t: any) => ({
       ...t,
       isPinned: config.pinnedTools.includes(t.tool_name),
       isDestructive: config.destructiveTools.includes(t.tool_name)

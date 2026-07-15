@@ -2,7 +2,7 @@ import express from 'express';
 import { embed } from './embeddings.js';
 import { searchTools, getToolByName, getAllToolSummaries, markToolInjected } from './catalog.js';
 import type { Config } from './config.js';
-import { serverStatuses } from './upstream.js';
+import { serverStatuses, activeUpstreams } from './upstream.js';
 import { broadcastEvent } from './dashboard/server.js';
 import { passesPreconditions } from './gates/precondition.js';
 
@@ -88,8 +88,10 @@ export function startLlmProxy(config: Config) {
       // Step 2: Embed the user prompt
       const promptVector = await embed(userPrompt);
 
+      const connectedServerNames = activeUpstreams.map((u: any) => u.name);
+
       // Step 3: Search the catalog for semantically matching tools
-      const matchedTools = searchTools(promptVector, 0.15, 15);
+      const matchedTools = searchTools(promptVector, connectedServerNames, 0.15, 15);
       console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
       matchedTools.forEach(t => {
         console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
@@ -128,7 +130,7 @@ export function startLlmProxy(config: Config) {
       const matchedToolNames = new Set(matchedTools.map(t => t.tool_name));
       for (const pinnedName of config.pinnedTools) {
         if (!matchedToolNames.has(pinnedName)) {
-          const pinnedTool = getToolByName(pinnedName);
+          const pinnedTool = getToolByName(pinnedName, connectedServerNames);
           if (pinnedTool) {
             if (!passesPreconditions(pinnedTool.tool_name, pinnedTool.server_name, config)) {
               continue; // Skip pinned tool if preconditions fail
@@ -159,7 +161,7 @@ export function startLlmProxy(config: Config) {
       body.tools = toolSchemas;
 
       // Step 6: System Prompt Assembly
-      const summaryPool = getAllToolSummaries();
+      const summaryPool = getAllToolSummaries(connectedServerNames);
       
       const isCliAgent = messages.length > 0 && messages[0].role === 'system' && messages[0].content === 'JUSTBETTER_CLI_AGENT';
 
