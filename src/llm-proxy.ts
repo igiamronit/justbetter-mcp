@@ -89,7 +89,7 @@ export function startLlmProxy(config: Config) {
       const promptVector = await embed(userPrompt);
 
       // Step 3: Search the catalog for semantically matching tools
-      const matchedTools = searchTools(promptVector, 0.28, 15);
+      const matchedTools = searchTools(promptVector, 0.15, 15);
       console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
       matchedTools.forEach(t => {
         console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
@@ -115,7 +115,11 @@ export function startLlmProxy(config: Config) {
         const schema = JSON.parse(match.full_schema_json);
         toolSchemas.push({
           type: "function",
-          function: schema
+          function: {
+            name: schema.name,
+            description: schema.description || "",
+            parameters: schema.inputSchema || { type: "object", properties: {} }
+          }
         });
         markToolInjected(match.tool_name);
       }
@@ -132,7 +136,11 @@ export function startLlmProxy(config: Config) {
             const schema = JSON.parse(pinnedTool.full_schema_json);
             toolSchemas.push({
               type: "function",
-              function: schema
+              function: {
+                name: schema.name,
+                description: schema.description || "",
+                parameters: schema.inputSchema || { type: "object", properties: {} }
+              }
             });
             markToolInjected(pinnedTool.tool_name);
             console.error(`  + ${pinnedName} (pinned)`);
@@ -150,25 +158,52 @@ export function startLlmProxy(config: Config) {
       // Step 5: Inject tools into the request body
       body.tools = toolSchemas;
 
-      // Step 6: Inject summary pool as a system message (if not already present)
-      const hasSummaryMessage = messages.some((m: any) =>
-        m.role === 'system' && m.content?.includes('The system will automatically provide relevant tool schemas')
-      );
-      if (!hasSummaryMessage) {
-        const summaryPool = getAllToolSummaries();
-        const summaryMessage = {
-          role: 'system',
-          content: `You have access to tools. The system will automatically provide relevant tool schemas based on the user's request. If no provided tool matches what you need, use the request_tools function to search for the right tool.\n\nAvailable capabilities:\n${summaryPool}`
-        };
-        // Insert at position 1 (after any existing system message, before user messages)
-        const firstUserIdx = messages.findIndex((m: any) => m.role === 'user');
-        if (firstUserIdx > 0) {
-          messages.splice(firstUserIdx, 0, summaryMessage);
-        } else {
-          messages.unshift(summaryMessage);
+      // Step 6: System Prompt Assembly
+      const summaryPool = getAllToolSummaries();
+      
+      const isCliAgent = messages.length > 0 && messages[0].role === 'system' && messages[0].content === 'JUSTBETTER_CLI_AGENT';
+
+      if (isCliAgent) {
+        messages[0].content = `You are JustBetter CLI, an autonomous coding assistant operating through an MCP Gateway with dynamically-injected tools.
+
+## Path resolution
+Never call a read/write tool with a bare or guessed filename. If you don't already have a path confirmed by a previous tool result, resolve it first. DO NOT walk directories one level at a time. Instead, use a one-shot broad search (like 'search_files' or 'directory_tree') scoped to a likely subdirectory rather than assuming repo root. Treat every path as unverified until a tool result confirms it.
+
+## Tool result validation
+A tool call that completes without throwing is NOT the same as success — read the result content itself. If it contains an error, an empty result, or a "not found" message, that is a signal to retry with a different path or search strategy, not a final answer.
+
+## Persistence
+Never report "file not found" or "doesn't exist" after a single attempt. Try at least one alternate path, directory, or naming convention first. If you've exhausted reasonable search strategies, say what you tried before concluding it's missing.
+
+## Reflection
+Reflect on tool results before acting on them. After receiving tool results, carefully reflect on their quality and determine optimal next steps in your content output before proceeding with the next tool call.
+
+## Tool access (Dynamic Semantic Tool Injection)
+Tools are injected per turn based on relevance — you may only call tools whose schema was provided this turn. The capability list below is for awareness only, not a callable tool list. If you need something from it that isn't in your current schemas, call request_tools to fetch it first, then use it. Calling an unlisted tool will be blocked.
+
+Available capabilities:
+${summaryPool}
+
+## Style
+Reference files by absolute path. No filler text before tool calls.`;
+      } else {
+        const hasSummaryMessage = messages.some((m: any) =>
+          m.role === 'system' && m.content?.includes('Dynamic Semantic Tool Injection')
+        );
+        if (!hasSummaryMessage) {
+          const summaryMessage = {
+            role: 'system',
+            content: `\n\n[CRITICAL GATEWAY INSTRUCTIONS]\nYou are operating through an MCP Gateway that uses Dynamic Semantic Tool Injection. DO NOT hallucinate tool calls. You can ONLY call tools if their JSON schema is explicitly provided to you in the current turn. Below is a SUMMARY of available capabilities. If you need a tool from this summary that is NOT in your current schemas, YOU MUST FIRST call the 'request_tools' function to explicitly fetch its schema.\n\nAvailable capabilities:\n${summaryPool}`
+          };
+          const firstUserIdx = messages.findIndex((m: any) => m.role === 'user');
+          if (firstUserIdx > 0) {
+            messages.splice(firstUserIdx, 0, summaryMessage);
+          } else {
+            messages.unshift(summaryMessage);
+          }
         }
-        body.messages = messages;
       }
+      body.messages = messages;
 
       console.error(`[LLM Proxy] Injected ${toolSchemas.length} tools (${toolSchemas.length - 1} matched/pinned + request_tools fallback)`);
 

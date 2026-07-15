@@ -14,6 +14,7 @@ export const ConfigSchema = z.object({
     port: z.number().default(4141),
     realApiBase: z.string(),       // e.g. "https://api.openai.com/v1"
     realApiKey: z.string(),        // The real API key to forward requests with
+    model: z.string().optional(),  // The model name to use (e.g. "gemini-1.5-flash")
   }).optional(),
   pinnedTools: z.array(z.string()).default([]),  // Tool names always injected regardless of semantic match
   destructiveTools: z.array(z.string()).default([]), // Tools that require explicit user confirmation

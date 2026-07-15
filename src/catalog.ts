@@ -49,6 +49,8 @@ db.exec(`
     injected_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+// Clear stale session state on boot to enforce strict per-session hallucination gating
+db.exec(`DELETE FROM session_state;`);
 
 const insertToolStmt = db.prepare(`
   INSERT INTO tools (id, server_name, tool_name, description, full_schema_json, fingerprint, is_quarantined)
