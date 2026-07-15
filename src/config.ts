@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { readFileSync, writeFileSync } from "fs";
 
+export const CORE_PINNED_TOOLS = [
+  'read_text_file',
+  'write_file',
+  'edit_file',
+  'search_files',
+  'list_directory',
+  'list_allowed_directories',
+  'run_terminal_command'
+];
+
 export const ConfigSchema = z.object({
   upstreamServers: z.array(
     z.object({
@@ -30,6 +40,9 @@ export function loadConfig(path: string): Config {
   const fileContent = readFileSync(path, "utf-8");
   const json = JSON.parse(fileContent);
   const config = ConfigSchema.parse(json);
+  
+  // Ensure core agentic tools are always pinned everywhere
+  config.pinnedTools = Array.from(new Set([...CORE_PINNED_TOOLS, ...config.pinnedTools]));
   
   if (config.llmProxy && process.env.LLM_PORT) {
     config.llmProxy.port = parseInt(process.env.LLM_PORT, 10);
