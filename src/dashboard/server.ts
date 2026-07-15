@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { loadConfig, saveConfig } from '../config.js';
+import { loadConfig, saveConfig, CORE_PINNED_TOOLS } from '../config.js';
 import type { Config } from '../config.js';
 import { getAllTools, clearQuarantine } from '../catalog.js';
 import { connectSingleUpstream, removeUpstream, serverStatuses } from '../upstream.js';
@@ -98,6 +98,9 @@ export function startDashboard(configPath: string) {
     if (pinned && !isPinned) {
       config.pinnedTools.push(toolName);
     } else if (!pinned && isPinned) {
+      if (CORE_PINNED_TOOLS.includes(toolName)) {
+        return res.status(400).json({ success: false, error: "Cannot unpin core agentic tools." });
+      }
       config.pinnedTools = config.pinnedTools.filter(t => t !== toolName);
     }
     

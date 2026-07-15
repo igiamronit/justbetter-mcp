@@ -186,6 +186,9 @@ Tools are injected per turn based on relevance — you may only call tools whose
 Available capabilities:
 ${summaryPool}
 
+## Tool usage
+If the user simply says "hi", "hello", or engages in casual conversation where no action is required, DO NOT call any tools. Only call tools when strictly necessary to fulfill the user's request.
+
 ## Style
 Reference files by absolute path. No filler text before tool calls.`;
       } else {
