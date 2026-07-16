@@ -65,7 +65,7 @@ async function executeSingleTool(toolName: string, args: any, config: any) {
   const { resolvedToolName, resolvedArgs } = resolveGroupedCall(toolName, args);
 
   // --- Phase 4 Security Gates ---
-  const gateResult = validateToolCall(toolName, args);
+  const gateResult = validateToolCall(resolvedToolName, resolvedArgs, config);
   if (!gateResult.allowed) {
     return {
       content: [{ type: "text", text: `Error: ${gateResult.error}` }],
@@ -139,10 +139,10 @@ async function main() {
 
       console.error(`[request_tools] Fallback triggered with query: "${query}"`);
 
-      // Embed the LLM's refined query and search with a wider net (lower threshold)
+      // Embed the LLM's refined query and search with a wider net (lower threshold), excluding pinned tools
       const queryVector = await embed(query);
       const connectedServers = activeUpstreams.map(u => u.name);
-      const results = searchTools(queryVector, connectedServers, 0.15, 10);
+      const results = searchTools(queryVector, connectedServers, config.pinnedTools, 0.15, 10);
 
       if (results.length === 0) {
         return {

@@ -113,10 +113,16 @@ export async function indexTools(serverName: string, tools: any[]) {
  * out any tools that fall below the semantic similarity threshold.
  * Quarantined tools are completely ignored.
  */
-export function searchTools(queryVector: Float32Array, connectedServers: string[], threshold: number = 0.28, topK: number = 15): SearchResult[] {
+export function searchTools(queryVector: Float32Array, connectedServers: string[], excludedTools: string[] = [], threshold: number = 0.28, topK: number = 15): SearchResult[] {
   if (connectedServers.length === 0) return [];
   const queryBuffer = Buffer.from(queryVector.buffer);
-  const placeholders = connectedServers.map(() => '?').join(',');
+  const serverPlaceholders = connectedServers.map(() => '?').join(',');
+  
+  let excludeClause = "";
+  if (excludedTools.length > 0) {
+    const excludePlaceholders = excludedTools.map(() => '?').join(',');
+    excludeClause = `AND t.tool_name NOT IN (${excludePlaceholders})`;
+  }
   
   // vec_distance_cosine returns cosine distance (0 means identical, 2 means completely opposite).
   // Similarity is (1 - distance).
@@ -124,10 +130,10 @@ export function searchTools(queryVector: Float32Array, connectedServers: string[
     SELECT t.*, (1.0 - vec_distance_cosine(v.embedding, ?)) as score
     FROM vec_tools v
     JOIN tools t ON v.id = t.id
-    WHERE t.is_quarantined = 0 AND t.server_name IN (${placeholders})
+    WHERE t.is_quarantined = 0 AND t.server_name IN (${serverPlaceholders}) ${excludeClause}
     ORDER BY score DESC
     LIMIT ?
-  `).all(queryBuffer, ...connectedServers, topK) as any[];
+  `).all(queryBuffer, ...connectedServers, ...excludedTools, topK) as any[];
 
   // Dynamic Threshold Filter
   return results
@@ -150,7 +156,7 @@ export function searchTools(queryVector: Float32Array, connectedServers: string[
 export function getToolByName(toolName: string, connectedServers: string[]): IndexedTool | undefined {
   if (connectedServers.length === 0) return undefined;
   const placeholders = connectedServers.map(() => '?').join(',');
-  const row = db.prepare(`SELECT * FROM tools WHERE tool_name = ? AND server_name IN (${placeholders})`).get(toolName, ...connectedServers) as any;
+  const row = db.prepare(`SELECT * FROM tools WHERE tool_name = ? AND is_quarantined = 0 AND server_name IN (${placeholders})`).get(toolName, ...connectedServers) as any;
   if (!row) return undefined;
   return {
     id: row.id,
@@ -166,11 +172,15 @@ export function getToolByName(toolName: string, connectedServers: string[]): Ind
  * Returns a compact summary of all indexed tools: "tool_name: first line of description"
  * Used for the summary pool system message.
  */
-export function getAllToolSummaries(connectedServers: string[]): string {
+export function getAllToolSummaries(connectedServers: string[], excludedToolNames: Set<string> = new Set()): string {
   if (connectedServers.length === 0) return '';
   const placeholders = connectedServers.map(() => '?').join(',');
-  const rows = db.prepare(`SELECT tool_name, description FROM tools WHERE server_name IN (${placeholders})`).all(...connectedServers) as any[];
-  return rows.map(r => `- ${r.tool_name}: ${(r.description || '').split('\n')[0]}`).join('\n');
+  const rows = db.prepare(`SELECT tool_name, description FROM tools WHERE server_name IN (${placeholders}) ORDER BY tool_name ASC`).all(...connectedServers) as any[];
+  
+  return rows
+    .filter(r => !excludedToolNames.has(r.tool_name))
+    .map(r => `- ${r.tool_name}: ${(r.description || '').split('\n')[0]}`)
+    .join('\n');
 }
 
 /**

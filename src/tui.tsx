@@ -18,6 +18,33 @@ const MAX_TURNS = 10;
 const MAX_TOOL_CHARS = 15000;
 const ASSISTANT_PREVIEW_LINES = 8;
 const TOOL_CONTENT_PREVIEW_LINES = 6;
+
+function smartTruncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  
+  const halfLimit = Math.floor(maxLength / 2);
+  
+  // Find the last newline before halfLimit for the head
+  let headEnd = text.lastIndexOf('\n', halfLimit);
+  if (headEnd === -1) headEnd = halfLimit; // fallback if no newlines
+  
+  // Find the first newline after (text.length - halfLimit) for the tail
+  const tailStartTarget = text.length - halfLimit;
+  let tailStart = text.indexOf('\n', tailStartTarget);
+  if (tailStart === -1) tailStart = tailStartTarget; // fallback
+  
+  // If we couldn't find good boundaries or they overlap weirdly, just hard cut
+  if (headEnd >= tailStart) {
+    headEnd = halfLimit;
+    tailStart = text.length - halfLimit;
+  }
+  
+  const head = text.substring(0, headEnd);
+  const tail = text.substring(tailStart);
+  const omitted = text.length - (head.length + tail.length);
+  
+  return `${head}\n\n...[SYSTEM WARNING: OUTPUT TRUNCATED. OMITTED ${omitted} CHARACTERS TO PREVENT CONTEXT EXHAUSTION]...\n\n${tail}`;
+}
 const TOOL_ARGS_PREVIEW_LINES = 3;
 
 type UiEventType = 'user' | 'assistant' | 'tool_request' | 'tool_running' | 'tool_result' | 'system';
@@ -141,10 +168,12 @@ function renderEventsToLines(events: UiEvent[], columns: number, expandedEventId
     if (event.type === 'tool_result') {
       const color = event.isError ? 'red' : 'green';
       const label = event.isError ? 'Tool failed' : 'Tool done';
-      lines.push({ text: `${label} > ${event.name} - ${event.summary || 'Completed'}`, color, bold: event.isError });
+      lines.push({ text: `${label} > ${event.name} - ${event.summary || 'Completed'}`, color, ...(event.isError ? { bold: true } : {}) });
 
       if (event.content && (event.isError || expanded)) {
-        const resultLines = wrapText(event.content, columns).map(text => ({ text, color: event.isError ? 'red' : undefined, dimColor: true }));
+        const resultLines: TranscriptLine[] = wrapText(event.content, columns).map(text => (
+          event.isError ? { text, color: 'red', dimColor: true } : { text, dimColor: true }
+        ));
         lines.push(...limitLines(resultLines, TOOL_CONTENT_PREVIEW_LINES, expanded, '[tool output collapsed]'));
       } else if (event.content && !event.isError) {
         lines.push({ text: 'Press Ctrl+X to expand latest tool output.', dimColor: true });
@@ -291,6 +320,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
   const runAgenticLoop = async (initialHistory: any[], turnId: string) => {
     let history = [...initialHistory];
     let turns = 0;
+    let requestToolsMisses = 0;
 
     while (mcpClient) {
       if (turns >= MAX_TURNS) {
@@ -300,13 +330,19 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
       turns++;
 
       try {
+        // Prune history to prevent context bloat on long sessions
+        // Keep the initial system prompt (index 0) and the last 40 messages
+        let prunedHistory = history;
+        if (history.length > 40) {
+          prunedHistory = [history[0], ...history.slice(-40)];
+        }
+
         const response = await fetch('http://localhost:4141/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: cliConfig.llmProxy?.model || 'gemini-1.5-flash',
-            messages: history,
-            tools: []
+            messages: prunedHistory
           })
         });
 
@@ -370,11 +406,35 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
             }
 
             if (resultText.length > MAX_TOOL_CHARS) {
-              resultText = `${resultText.substring(0, MAX_TOOL_CHARS)}\n\n...[TRUNCATED]...`;
+              resultText = smartTruncate(resultText, MAX_TOOL_CHARS);
             }
 
             if (isFailure) {
-              resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed. You MUST use 'search_files', 'directory_tree', or 'request_tools' to find the correct path or alternative solution and try again.`;
+              const lowerRes = resultText.toLowerCase();
+              const isHallucination = lowerRes.includes('is not currently available. please use');
+              const isEnoent = lowerRes.includes('enoent') || lowerRes.includes('no such file');
+              const isAuth = lowerRes.includes('eacces') || lowerRes.includes('eperm') || lowerRes.includes('permission denied') || lowerRes.includes('unauthorized') || lowerRes.includes('401') || lowerRes.includes('403');
+              
+              if (isHallucination) {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}`;
+              } else if (isAuth) {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed. Do not retry with the same approach. Tell the user this requires a permission or credential they need to fix.`;
+              } else if (isEnoent) {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed. DO NOT apologize or give up. If it failed due to a missing path, you MUST use 'list_directory' on the root first to safely inspect the top-level structure. If two different approaches both fail, stop and explain the blocker to the user rather than continuing to retry.`;
+              } else {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed for the reason shown above — inspect the error message itself before retrying. If two different approaches both fail, stop and explain the blocker to the user rather than continuing to retry.`;
+              }
+            }
+
+            if (name === 'request_tools') {
+              if (resultText.includes('No matching tools found')) {
+                requestToolsMisses++;
+                if (requestToolsMisses >= 2) {
+                  resultText = `${resultText}\n\n[SYSTEM DIRECTIVE]: Multiple searches haven't found this capability — it likely doesn't exist in this environment. Tell the user, or propose a workaround, rather than continuing to search.`;
+                }
+              } else {
+                requestToolsMisses = 0;
+              }
             }
 
             resultMsg = {
@@ -460,9 +520,9 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         {visibleLines.map((line, index) => (
           <Text
             key={`${scrollTopLine}-${index}`}
-            color={line.color}
-            bold={line.bold}
-            dimColor={line.dimColor}
+            {...(line.color !== undefined ? { color: line.color } : {})}
+            {...(line.bold !== undefined ? { bold: line.bold } : {})}
+            {...(line.dimColor !== undefined ? { dimColor: line.dimColor } : {})}
             wrap="truncate-end"
           >
             {line.text}
