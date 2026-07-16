@@ -10,6 +10,34 @@ try {
 } catch (e: any) {
   // It will warn later or fail gracefully
 }
+
+function smartTruncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  
+  const halfLimit = Math.floor(maxLength / 2);
+  
+  // Find the last newline before halfLimit for the head
+  let headEnd = text.lastIndexOf('\n', halfLimit);
+  if (headEnd === -1) headEnd = halfLimit; // fallback if no newlines
+  
+  // Find the first newline after (text.length - halfLimit) for the tail
+  const tailStartTarget = text.length - halfLimit;
+  let tailStart = text.indexOf('\n', tailStartTarget);
+  if (tailStart === -1) tailStart = tailStartTarget; // fallback
+  
+  // If we couldn't find good boundaries or they overlap weirdly, just hard cut
+  if (headEnd >= tailStart) {
+    headEnd = halfLimit;
+    tailStart = text.length - halfLimit;
+  }
+  
+  const head = text.substring(0, headEnd);
+  const tail = text.substring(tailStart);
+  const omitted = text.length - (head.length + tail.length);
+  
+  return `${head}\n\n...[SYSTEM WARNING: OUTPUT TRUNCATED. OMITTED ${omitted} CHARACTERS TO PREVENT CONTEXT EXHAUSTION]...\n\n${tail}`;
+}
+
 const MAX_CONTEXT_CHARS = 200000;
 
 let mcpClient: Client;
@@ -31,6 +59,7 @@ const rl = readline.createInterface({
 async function runAgenticLoop() {
   let isFinished = false;
   let turns = 0;
+  let requestToolsMisses = 0;
   const MAX_TURNS = 10;
 
   while (!isFinished) {
@@ -103,18 +132,41 @@ async function runAgenticLoop() {
             // PREVENT CONTEXT EXHAUSTION
             const MAX_TOOL_CHARS = 15000;
             if (resultText.length > MAX_TOOL_CHARS) {
-              resultText = resultText.substring(0, MAX_TOOL_CHARS) + 
-                `\n\n...[SYSTEM WARNING: OUTPUT TRUNCATED. THE TOOL RETURNED OVER ${MAX_TOOL_CHARS} CHARACTERS WHICH WOULD EXHAUST CONTEXT MEMORY. PLEASE BE MORE SPECIFIC OR USE A DIFFERENT TOOL]...`;
+              resultText = smartTruncate(resultText, MAX_TOOL_CHARS);
             }
             
             // IF TOOL FAILED, INJECT A LOUD RETRY DIRECTIVE
             if (isFailure) {
-              resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed. DO NOT apologize or give up. You MUST use 'search_files', 'directory_tree', or 'request_tools' to find the correct path or alternative solution and try again.`;
+              const lowerRes = resultText.toLowerCase();
+              const isHallucination = lowerRes.includes('is not currently available. please use');
+              const isEnoent = lowerRes.includes('enoent') || lowerRes.includes('no such file');
+              const isAuth = lowerRes.includes('eacces') || lowerRes.includes('eperm') || lowerRes.includes('permission denied') || lowerRes.includes('unauthorized') || lowerRes.includes('401') || lowerRes.includes('403');
+              
+              if (isHallucination) {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}`;
+              } else if (isAuth) {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed. Do not retry with the same approach. Tell the user this requires a permission or credential they need to fix.`;
+              } else if (isEnoent) {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed. DO NOT apologize or give up. If it failed due to a missing path, you MUST use 'list_directory' on the root first to safely inspect the top-level structure. If two different approaches both fail, stop and explain the blocker to the user rather than continuing to retry.`;
+              } else {
+                resultText = `[TOOL EXECUTION FAILED]\n${resultText}\n\n[SYSTEM DIRECTIVE]: The tool failed for the reason shown above — inspect the error message itself before retrying. If two different approaches both fail, stop and explain the blocker to the user rather than continuing to retry.`;
+              }
               console.log(`[❌ Tool reported failure]`);
             } else {
               console.log(`[✅ Tool completed]`);
             }
             
+            if (name === 'request_tools') {
+              if (resultText.includes('No matching tools found')) {
+                requestToolsMisses++;
+                if (requestToolsMisses >= 2) {
+                  resultText = `${resultText}\n\n[SYSTEM DIRECTIVE]: Multiple searches haven't found this capability — it likely doesn't exist in this environment. Tell the user, or propose a workaround, rather than continuing to search.`;
+                }
+              } else {
+                requestToolsMisses = 0;
+              }
+            }
+
             messages.push({
               role: "tool",
               name: name,
