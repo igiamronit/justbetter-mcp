@@ -14,7 +14,7 @@ try {
 }
 
 const INITIAL_LLM_MESSAGES = [{ role: 'system', content: 'JUSTBETTER_CLI_AGENT' }];
-const MAX_TURNS = 10;
+const MAX_TURNS = 20;
 const MAX_TOOL_CHARS = 15000;
 const ASSISTANT_PREVIEW_LINES = 8;
 const TOOL_CONTENT_PREVIEW_LINES = 6;
@@ -189,6 +189,11 @@ function renderEventsToLines(events: UiEvent[], columns: number, expandedEventId
   return lines.length > 0 ? lines : [{ text: 'Type a message. Use PageUp/PageDown or Ctrl+U/Ctrl+D to scroll.', dimColor: true }];
 }
 
+function maskKey(key: string | undefined): string {
+  if (!key || key.length < 8) return '********';
+  return key.slice(0, 4) + '...' + key.slice(-4);
+}
+
 function findLatestExpandableEventId(events: UiEvent[]) {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
@@ -341,7 +346,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: cliConfig.llmProxy?.model || 'gemini-1.5-flash',
+            model: cliConfig.llmProxy?.model || 'mistral-large-latest',
             messages: prunedHistory
           })
         });
@@ -497,6 +502,85 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         setIsPinnedToBottom(true);
         return;
       }
+
+      if (text === '/config') {
+        const provider = cliConfig.apiProvider || 'gemini';
+        const llm = cliConfig.llmProxy || {};
+        const lines = [
+          `── Configuration ──`,
+          `  Provider:     ${provider}`,
+          `  Gemini Key:   ${maskKey(llm.geminiApiKey || llm.realApiKey)}`,
+          `  Mistral Key:  ${maskKey(llm.mistralApiKey)}`,
+          `  Model:        ${llm.model || '(not set)'}`,
+          ``,
+          `Commands:`,
+          `  /config set provider gemini|mistral`,
+          `  /config set gemini-key <key>`,
+          `  /config set mistral-key <key>`,
+          `  /config set model <name>`,
+          `  /config save`,
+          `  /config reload`,
+        ];
+        for (const line of lines) {
+          appendEvent({ type: 'system', text: line });
+        }
+        return;
+      }
+
+      if (text.startsWith('/config set ')) {
+        const setting = text.slice(12).trim();
+        const spaceIdx = setting.indexOf(' ');
+        if (spaceIdx === -1) {
+          appendEvent({ type: 'system', text: 'Usage: /config set provider|gemini-key|mistral-key|model <value>' });
+          return;
+        }
+        const key = setting.slice(0, spaceIdx);
+        const value = setting.slice(spaceIdx + 1);
+
+        if (key === 'provider') {
+          if (value !== 'gemini' && value !== 'mistral') {
+            appendEvent({ type: 'system', text: 'Provider must be "gemini" or "mistral"' });
+            return;
+          }
+          cliConfig.apiProvider = value;
+          appendEvent({ type: 'system', text: `Provider set to ${value} (restart proxy to take effect)` });
+        } else if (key === 'gemini-key') {
+          if (!cliConfig.llmProxy) cliConfig.llmProxy = {};
+          cliConfig.llmProxy.geminiApiKey = value;
+          appendEvent({ type: 'system', text: 'Gemini API key updated (restart proxy to take effect)' });
+        } else if (key === 'mistral-key') {
+          if (!cliConfig.llmProxy) cliConfig.llmProxy = {};
+          cliConfig.llmProxy.mistralApiKey = value;
+          appendEvent({ type: 'system', text: 'Mistral API key updated (restart proxy to take effect)' });
+        } else if (key === 'model') {
+          if (!cliConfig.llmProxy) cliConfig.llmProxy = {};
+          cliConfig.llmProxy.model = value;
+          appendEvent({ type: 'system', text: `Model set to ${value}` });
+        } else {
+          appendEvent({ type: 'system', text: `Unknown setting: ${key}` });
+        }
+        return;
+      }
+
+      if (text === '/config save') {
+        try {
+          fs.writeFileSync(configPath, JSON.stringify(cliConfig, null, 2), 'utf-8');
+          appendEvent({ type: 'system', text: `Config saved to ${configPath}` });
+        } catch (e: any) {
+          appendEvent({ type: 'system', text: `Error saving config: ${e.message}` });
+        }
+        return;
+      }
+
+      if (text === '/config reload') {
+        try {
+          cliConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+          appendEvent({ type: 'system', text: `Config reloaded from ${configPath}` });
+        } catch (e: any) {
+          appendEvent({ type: 'system', text: `Error reloading config: ${e.message}` });
+        }
+        return;
+      }
     }
 
     if (isBusy) return;
@@ -566,4 +650,19 @@ async function start() {
 start().catch(err => {
   console.error(err);
   process.exit(1);
+});
+
+// Robust cleanup on Windows to ensure orphan processes (like node.exe spawned by npx.cmd) die
+process.on('SIGINT', () => {
+  if (process.platform === 'win32') {
+    import('child_process').then(({ execSync }) => {
+      try {
+        execSync(`taskkill /F /T /PID ${process.pid}`);
+      } catch (e) {
+        process.exit(0);
+      }
+    });
+  } else {
+    process.exit(0);
+  }
 });
