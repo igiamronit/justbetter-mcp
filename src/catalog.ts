@@ -227,3 +227,14 @@ const checkInjectedStmt = db.prepare(`
 export function isToolInjected(toolName: string): boolean {
   return checkInjectedStmt.get(toolName) !== undefined;
 }
+
+const getRecentlyInjectedStmt = db.prepare(`
+  SELECT t.* 
+  FROM session_state s
+  JOIN tools t ON s.tool_name = t.tool_name
+  WHERE s.injected_at >= datetime('now', '-1 hour')
+`);
+
+export function getRecentlyInjectedTools(): any[] {
+  return getRecentlyInjectedStmt.all();
+}

@@ -74,7 +74,7 @@ async function runAgenticLoop() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: cliConfig.llmProxy?.model || "gemini-1.5-flash",
+          model: cliConfig.llmProxy?.model || "mistral-large-latest",
           messages: messages,
           tools: [] // The LLM Proxy will automatically inject these!
         })

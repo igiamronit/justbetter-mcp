@@ -1,10 +1,13 @@
 import express from 'express';
+import fs from 'fs';
 import { embed } from './embeddings.js';
-import { searchTools, getToolByName, getAllToolSummaries, markToolInjected } from './catalog.js';
+import { searchTools, getToolByName, getAllToolSummaries, markToolInjected, getRecentlyInjectedTools } from './catalog.js';
 import type { Config } from './config.js';
+import { getEffectiveApiBase, getEffectiveApiKey } from './config.js';
 import { serverStatuses, activeUpstreams } from './upstream.js';
 import { broadcastEvent } from './dashboard/server.js';
 import { passesPreconditions } from './gates/precondition.js';
+import { fetchWithRetry } from './fetch-retry.js';
 
 // The request_tools fallback schema — always injected alongside matched tools
 const REQUEST_TOOLS_SCHEMA = {
@@ -91,7 +94,9 @@ export function startLlmProxy(config: Config) {
       const connectedServerNames = activeUpstreams.map((u: any) => u.name);
 
       // Step 3: Search the catalog for semantically matching tools (excluding pinned tools to save compute)
-      const matchedTools = searchTools(promptVector, connectedServerNames, config.pinnedTools, 0.15, 15);
+      // We use a strict threshold (0.35) and low topK (4) for auto-injection to save tokens.
+      // If the LLM needs something else, it will use request_tools (which casts a wider net).
+      const matchedTools = searchTools(promptVector, connectedServerNames, config.pinnedTools, 0.35, 4);
       console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
       matchedTools.forEach(t => {
         console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
@@ -123,7 +128,16 @@ export function startLlmProxy(config: Config) {
         }
       }
 
-      // 3. Fallbacks (request_tools & batch_call)
+      // 3. Recently requested tools (to prevent hallucination failures on subsequent turns)
+      const recentlyInjected = getRecentlyInjectedTools();
+      for (const t of recentlyInjected) {
+        // Ensure they belong to connected servers
+        if (connectedServerNames.includes(t.server_name) && passesPreconditions(t.tool_name, t.server_name, config)) {
+          finalTools.set(t.tool_name, JSON.parse(t.full_schema_json));
+        }
+      }
+
+      // 4. Fallbacks (request_tools & batch_call)
       finalTools.set('request_tools', REQUEST_TOOLS_SCHEMA);
       finalTools.set('batch_call', BATCH_CALL_SCHEMA);
 
@@ -202,16 +216,17 @@ Reference files by absolute path. No filler text before tool calls.`;
 
       console.error(`[LLM Proxy] Injected ${toolSchemas.length} tools (${toolSchemas.length - 1} matched/pinned + request_tools fallback)`);
 
-      // Step 7: Forward to the real LLM API
-      const realUrl = `${llmConfig.realApiBase}/chat/completions`;
+      // Step 7: Forward to the real LLM API (using provider-aware config)
+      const effectiveBase = getEffectiveApiBase(config);
+      const effectiveKey = getEffectiveApiKey(config);
+      const realUrl = `${effectiveBase}/chat/completions`;
 
-      // Clone the original headers, swap auth, remove host
       const forwardHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${llmConfig.realApiKey}`,
+        'Authorization': `Bearer ${effectiveKey}`,
       };
 
-      const realResponse = await fetch(realUrl, {
+      const realResponse = await fetchWithRetry(realUrl, {
         method: 'POST',
         headers: forwardHeaders,
         body: JSON.stringify(body),
@@ -247,6 +262,19 @@ Reference files by absolute path. No filler text before tool calls.`;
       } else {
         // Non-streaming: return full JSON
         const responseData = await realResponse.text();
+        try {
+          const parsed = JSON.parse(responseData);
+          if (parsed.usage) {
+            const injectedCount = toolSchemas.length;
+            const logLine = `${new Date().toISOString()},${parsed.usage.prompt_tokens || 0},${parsed.usage.completion_tokens || 0},${parsed.usage.total_tokens || 0},${injectedCount}\n`;
+            if (!fs.existsSync('token_log.csv')) {
+              fs.writeFileSync('token_log.csv', 'timestamp,prompt_tokens,completion_tokens,total_tokens,tools_injected\n');
+            }
+            fs.appendFileSync('token_log.csv', logLine);
+          }
+        } catch (e) {
+          console.error('[LLM Proxy] Failed to parse token usage:', e);
+        }
         res.send(responseData);
       }
 
@@ -264,12 +292,14 @@ Reference files by absolute path. No filler text before tool calls.`;
     if (req.path === '/chat/completions') return;
 
     try {
-      const realUrl = `${llmConfig.realApiBase}${req.path}`;
-      const realResponse = await fetch(realUrl, {
+      const effectiveBase = getEffectiveApiBase(config);
+      const effectiveKey = getEffectiveApiKey(config);
+      const realUrl = `${effectiveBase}${req.path}`;
+      const realResponse = await fetchWithRetry(realUrl, {
         method: req.method,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${llmConfig.realApiKey}`,
+          'Authorization': `Bearer ${effectiveKey}`,
         },
         body: ['GET', 'HEAD'].includes(req.method) ? null : JSON.stringify(req.body),
       });
@@ -282,7 +312,7 @@ Reference files by absolute path. No filler text before tool calls.`;
 
   const server = app.listen(llmConfig.port, () => {
     console.error(`[LLM Proxy] Listening on http://localhost:${llmConfig.port}/v1`);
-    console.error(`[LLM Proxy] Forwarding to ${llmConfig.realApiBase}`);
+    console.error(`[LLM Proxy] Provider: ${config.apiProvider || 'gemini'} → ${getEffectiveApiBase(config)}`);
   });
 
   server.on('error', (err: any) => {
