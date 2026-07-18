@@ -53,7 +53,7 @@ graph TD
     end
 ```
 
-#### Sequence Diagram Style (Alternative)
+#### Sequence Diagram Style
 ```mermaid
 sequenceDiagram
     actor User
@@ -107,7 +107,7 @@ graph TD
     MCPProxy -->|"9. Return"| Client
 ```
 
-#### Sequence Diagram Style (Alternative)
+#### Sequence Diagram Style
 ```mermaid
 sequenceDiagram
     actor User
