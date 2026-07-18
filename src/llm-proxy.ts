@@ -1,10 +1,13 @@
 import express from 'express';
+import fs from 'fs';
 import { embed } from './embeddings.js';
-import { searchTools, getToolByName, getAllToolSummaries, markToolInjected } from './catalog.js';
+import { searchTools, getToolByName, getAllToolSummaries, markToolInjected, getRecentlyInjectedTools } from './catalog.js';
 import type { Config } from './config.js';
+import { getEffectiveApiBase, getEffectiveApiKey } from './config.js';
 import { serverStatuses, activeUpstreams } from './upstream.js';
 import { broadcastEvent } from './dashboard/server.js';
 import { passesPreconditions } from './gates/precondition.js';
+import { fetchWithRetry } from './fetch-retry.js';
 
 // The request_tools fallback schema — always injected alongside matched tools
 const REQUEST_TOOLS_SCHEMA = {
@@ -90,8 +93,10 @@ export function startLlmProxy(config: Config) {
 
       const connectedServerNames = activeUpstreams.map((u: any) => u.name);
 
-      // Step 3: Search the catalog for semantically matching tools
-      const matchedTools = searchTools(promptVector, connectedServerNames, 0.15, 15);
+      // Step 3: Search the catalog for semantically matching tools (excluding pinned tools to save compute)
+      // We use a strict threshold (0.35) and low topK (4) for auto-injection to save tokens.
+      // If the LLM needs something else, it will use request_tools (which casts a wider net).
+      const matchedTools = searchTools(promptVector, connectedServerNames, config.pinnedTools, 0.35, 4);
       console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
       matchedTools.forEach(t => {
         console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
@@ -105,63 +110,62 @@ export function startLlmProxy(config: Config) {
         isFallback: false
       });
 
-      // Step 4: Build the tools array to inject
-      const toolSchemas: any[] = [];
+      // Step 4: Build the tools array to inject using a single-pass Deduplication Map
+      const finalTools = new Map();
 
-      // Add semantically matched tools
-      for (const match of matchedTools) {
-        if (!passesPreconditions(match.tool_name, match.server_name, config)) {
-          continue; // Skip injecting this tool because preconditions failed
-        }
-        
-        const schema = JSON.parse(match.full_schema_json);
-        toolSchemas.push({
-          type: "function",
-          function: {
-            name: schema.name,
-            description: schema.description || "",
-            parameters: schema.inputSchema || { type: "object", properties: {} }
-          }
-        });
-        markToolInjected(match.tool_name);
-      }
-
-      // Add pinned tools (if not already matched)
-      const matchedToolNames = new Set(matchedTools.map(t => t.tool_name));
+      // 1. Pinned Tools (Added first so they are guaranteed present)
       for (const pinnedName of config.pinnedTools) {
-        if (!matchedToolNames.has(pinnedName)) {
-          const pinnedTool = getToolByName(pinnedName, connectedServerNames);
-          if (pinnedTool) {
-            if (!passesPreconditions(pinnedTool.tool_name, pinnedTool.server_name, config)) {
-              continue; // Skip pinned tool if preconditions fail
-            }
-            const schema = JSON.parse(pinnedTool.full_schema_json);
-            toolSchemas.push({
-              type: "function",
-              function: {
-                name: schema.name,
-                description: schema.description || "",
-                parameters: schema.inputSchema || { type: "object", properties: {} }
-              }
-            });
-            markToolInjected(pinnedTool.tool_name);
-            console.error(`  + ${pinnedName} (pinned)`);
-          }
+        const pinnedTool = getToolByName(pinnedName, connectedServerNames);
+        if (pinnedTool && passesPreconditions(pinnedTool.tool_name, pinnedTool.server_name, config)) {
+          finalTools.set(pinnedName, JSON.parse(pinnedTool.full_schema_json));
         }
       }
 
-      // Always add the request_tools and batch_call fallbacks
-      toolSchemas.push(REQUEST_TOOLS_SCHEMA);
-      markToolInjected('request_tools');
-      
-      toolSchemas.push(BATCH_CALL_SCHEMA);
-      markToolInjected('batch_call');
+      // 2. Semantically Matched Tools
+      for (const match of matchedTools) {
+        if (passesPreconditions(match.tool_name, match.server_name, config)) {
+          finalTools.set(match.tool_name, JSON.parse(match.full_schema_json));
+        }
+      }
+
+      // 3. Recently requested tools (to prevent hallucination failures on subsequent turns)
+      const recentlyInjected = getRecentlyInjectedTools();
+      for (const t of recentlyInjected) {
+        // Ensure they belong to connected servers
+        if (connectedServerNames.includes(t.server_name) && passesPreconditions(t.tool_name, t.server_name, config)) {
+          finalTools.set(t.tool_name, JSON.parse(t.full_schema_json));
+        }
+      }
+
+      // 4. Fallbacks (request_tools & batch_call)
+      finalTools.set('request_tools', REQUEST_TOOLS_SCHEMA);
+      finalTools.set('batch_call', BATCH_CALL_SCHEMA);
+
+      // Assemble final array and mark injected
+      const toolSchemas: any[] = [];
+      const injectedToolNames = new Set<string>();
+
+      for (const [name, schema] of finalTools) {
+        toolSchemas.push(
+          (name === 'request_tools' || name === 'batch_call') ? schema : {
+            type: "function",
+            function: {
+              name,
+              description: schema.description || "",
+              parameters: schema.inputSchema || { type: "object", properties: {} }
+            }
+          }
+        );
+        injectedToolNames.add(name);
+        markToolInjected(name);
+      }
 
       // Step 5: Inject tools into the request body
       body.tools = toolSchemas;
 
       // Step 6: System Prompt Assembly
-      const summaryPool = getAllToolSummaries(connectedServerNames);
+      // Exclude already injected tools from the text summary pool to save tokens
+      const summaryPool = getAllToolSummaries(connectedServerNames, injectedToolNames);
       
       const isCliAgent = messages.length > 0 && messages[0].role === 'system' && messages[0].content === 'JUSTBETTER_CLI_AGENT';
 
@@ -169,7 +173,7 @@ export function startLlmProxy(config: Config) {
         messages[0].content = `You are JustBetter CLI, an autonomous coding assistant operating through an MCP Gateway with dynamically-injected tools.
 
 ## Path resolution
-Never call a read/write tool with a bare or guessed filename. If you don't already have a path confirmed by a previous tool result, resolve it first. DO NOT walk directories one level at a time. Instead, use a one-shot broad search (like 'search_files' or 'directory_tree') scoped to a likely subdirectory rather than assuming repo root. Treat every path as unverified until a tool result confirms it.
+If you already know the exact file path (the user gave it, or you've seen it already), open it directly. Only when the path is unknown or you're guessing, call list_directory on root first (cheap, always safe) to see the top-level folders, THEN scope your broad search to the specific subdirectory that looks relevant (e.g. src/, not the whole repo). Never call a read/write tool with a bare or guessed filename. Treat every path as unverified until a tool result confirms it.
 
 ## Tool result validation
 A tool call that completes without throwing is NOT the same as success — read the result content itself. If it contains an error, an empty result, or a "not found" message, that is a signal to retry with a different path or search strategy, not a final answer.
@@ -181,10 +185,13 @@ Never report "file not found" or "doesn't exist" after a single attempt. Try at 
 Reflect on tool results before acting on them. After receiving tool results, carefully reflect on their quality and determine optimal next steps in your content output before proceeding with the next tool call.
 
 ## Tool access (Dynamic Semantic Tool Injection)
-Tools are injected per turn based on relevance — you may only call tools whose schema was provided this turn. The capability list below is for awareness only, not a callable tool list. If you need something from it that isn't in your current schemas, call request_tools to fetch it first, then use it. Calling an unlisted tool will be blocked.
+Tools are injected per turn based on relevance. Tools provided in your native tool array with full parameters are ready to call now. Capabilities listed below only by name are NOT yet loaded — you must call request_tools with a description before you can use them. Calling an unloaded tool directly will be blocked.
 
 Available capabilities:
 ${summaryPool}
+
+## Tool usage
+If the user simply says "hi", "hello", or engages in casual conversation where no action is required, DO NOT call any tools. Only call tools when strictly necessary to fulfill the user's request.
 
 ## Style
 Reference files by absolute path. No filler text before tool calls.`;
@@ -195,7 +202,7 @@ Reference files by absolute path. No filler text before tool calls.`;
         if (!hasSummaryMessage) {
           const summaryMessage = {
             role: 'system',
-            content: `\n\n[CRITICAL GATEWAY INSTRUCTIONS]\nYou are operating through an MCP Gateway that uses Dynamic Semantic Tool Injection. DO NOT hallucinate tool calls. You can ONLY call tools if their JSON schema is explicitly provided to you in the current turn. Below is a SUMMARY of available capabilities. If you need a tool from this summary that is NOT in your current schemas, YOU MUST FIRST call the 'request_tools' function to explicitly fetch its schema.\n\nAvailable capabilities:\n${summaryPool}`
+            content: `\n\n[CRITICAL GATEWAY INSTRUCTIONS]\nYou are operating through an MCP Gateway that uses Dynamic Semantic Tool Injection. DO NOT hallucinate tool calls. Tools provided in your native tool array with full parameters are ready to call now. Capabilities listed below only by name are NOT yet loaded — YOU MUST FIRST call the 'request_tools' function to explicitly fetch a schema before attempting to use it.\n\nAvailable capabilities:\n${summaryPool}`
           };
           const firstUserIdx = messages.findIndex((m: any) => m.role === 'user');
           if (firstUserIdx > 0) {
@@ -209,16 +216,17 @@ Reference files by absolute path. No filler text before tool calls.`;
 
       console.error(`[LLM Proxy] Injected ${toolSchemas.length} tools (${toolSchemas.length - 1} matched/pinned + request_tools fallback)`);
 
-      // Step 7: Forward to the real LLM API
-      const realUrl = `${llmConfig.realApiBase}/chat/completions`;
+      // Step 7: Forward to the real LLM API (using provider-aware config)
+      const effectiveBase = getEffectiveApiBase(config);
+      const effectiveKey = getEffectiveApiKey(config);
+      const realUrl = `${effectiveBase}/chat/completions`;
 
-      // Clone the original headers, swap auth, remove host
       const forwardHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${llmConfig.realApiKey}`,
+        'Authorization': `Bearer ${effectiveKey}`,
       };
 
-      const realResponse = await fetch(realUrl, {
+      const realResponse = await fetchWithRetry(realUrl, {
         method: 'POST',
         headers: forwardHeaders,
         body: JSON.stringify(body),
@@ -254,6 +262,19 @@ Reference files by absolute path. No filler text before tool calls.`;
       } else {
         // Non-streaming: return full JSON
         const responseData = await realResponse.text();
+        try {
+          const parsed = JSON.parse(responseData);
+          if (parsed.usage) {
+            const injectedCount = toolSchemas.length;
+            const logLine = `${new Date().toISOString()},${parsed.usage.prompt_tokens || 0},${parsed.usage.completion_tokens || 0},${parsed.usage.total_tokens || 0},${injectedCount}\n`;
+            if (!fs.existsSync('token_log.csv')) {
+              fs.writeFileSync('token_log.csv', 'timestamp,prompt_tokens,completion_tokens,total_tokens,tools_injected\n');
+            }
+            fs.appendFileSync('token_log.csv', logLine);
+          }
+        } catch (e) {
+          console.error('[LLM Proxy] Failed to parse token usage:', e);
+        }
         res.send(responseData);
       }
 
@@ -271,12 +292,14 @@ Reference files by absolute path. No filler text before tool calls.`;
     if (req.path === '/chat/completions') return;
 
     try {
-      const realUrl = `${llmConfig.realApiBase}${req.path}`;
-      const realResponse = await fetch(realUrl, {
+      const effectiveBase = getEffectiveApiBase(config);
+      const effectiveKey = getEffectiveApiKey(config);
+      const realUrl = `${effectiveBase}${req.path}`;
+      const realResponse = await fetchWithRetry(realUrl, {
         method: req.method,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${llmConfig.realApiKey}`,
+          'Authorization': `Bearer ${effectiveKey}`,
         },
         body: ['GET', 'HEAD'].includes(req.method) ? null : JSON.stringify(req.body),
       });
@@ -289,7 +312,7 @@ Reference files by absolute path. No filler text before tool calls.`;
 
   const server = app.listen(llmConfig.port, () => {
     console.error(`[LLM Proxy] Listening on http://localhost:${llmConfig.port}/v1`);
-    console.error(`[LLM Proxy] Forwarding to ${llmConfig.realApiBase}`);
+    console.error(`[LLM Proxy] Provider: ${config.apiProvider || 'gemini'} → ${getEffectiveApiBase(config)}`);
   });
 
   server.on('error', (err: any) => {

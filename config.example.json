@@ -1,4 +1,5 @@
 {
+  "apiProvider": "gemini",
   "upstreamServers": [
     {
       "name": "filesystem",
@@ -8,8 +9,9 @@
   ],
   "llmProxy": {
     "port": 4141,
-    "realApiBase": "https://api.openai.com/v1",
-    "realApiKey": "sk-YOUR-REAL-API-KEY-HERE"
+    "geminiApiKey": "YOUR-GEMINI-API-KEY",
+    "mistralApiKey": "YOUR-MISTRAL-API-KEY",
+    "model": "mistral-large-latest"
   },
   "pinnedTools": []
 }
