@@ -30,6 +30,7 @@ export const LlmProxySchema = z.object({
 });
 
 export const ConfigSchema = z.object({
+  semanticPromptInjection: z.boolean().default(true),
   apiProvider: z.enum(["gemini", "mistral"]).default("gemini"),
   upstreamServers: z.array(
     z.object({

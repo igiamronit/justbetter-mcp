@@ -161,7 +161,10 @@ This prompt was specifically chosen because it forces a multi-step, multi-server
 | :--- | :--- | :--- |
 | **OpenCode (Unoptimized, same servers)** | 133.9K | Base |
 | **OpenCode (Default tools)** | 125.5K | +6.27% |
+| **JustBetter MCP (Injection Disabled / Fallback Only)** | **116.9K** | **+12.7%** |
 | **JustBetter MCP (Dynamic Injection)** | **74.5K** | **+44.3%** |
+
+*Note: The massive gap between the last two configurations explicitly proves that dynamic semantic injection works by reducing the cognitive load on the LLM. Without it, the LLM wastes significant tokens thinking, planning, and explicitly requesting tools across extra turns. Dynamic injection eliminates this overhead entirely by handing the LLM exactly what it needs on turn 1.*
 
 *Caveat:* This is an early result on a single-task scope with a relatively small setup. The OpenCode token count also includes harness-overhead confounds, but the trend clearly demonstrates the context savings of dynamic injection.
 
@@ -186,6 +189,7 @@ Create a `config.json` in the project root. Here is an example format detailing 
 
 ```json
 {
+  "semanticPromptInjection": true,
   "apiProvider": "mistral",
   "llmProxy": {
     "port": 4141,

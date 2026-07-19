@@ -88,19 +88,24 @@ export function startLlmProxy(config: Config) {
 
       console.error(`\n[LLM Proxy] Intercepted prompt: "${userPrompt.slice(0, 80)}${userPrompt.length > 80 ? '...' : ''}"`);
 
-      // Step 2: Embed the user prompt
-      const promptVector = await embed(userPrompt);
-
       const connectedServerNames = activeUpstreams.map((u: any) => u.name);
 
-      // Step 3: Search the catalog for semantically matching tools (excluding pinned tools to save compute)
-      // We use a strict threshold (0.35) and low topK (4) for auto-injection to save tokens.
-      // If the LLM needs something else, it will use request_tools (which casts a wider net).
-      const matchedTools = searchTools(promptVector, connectedServerNames, config.pinnedTools, 0.35, 4);
-      console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
-      matchedTools.forEach(t => {
-        console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
-      });
+      let matchedTools: any[] = [];
+      if (config.semanticPromptInjection) {
+        // Step 2: Embed the user prompt
+        const promptVector = await embed(userPrompt);
+
+        // Step 3: Search the catalog for semantically matching tools (excluding pinned tools to save compute)
+        // We use a strict threshold (0.35) and low topK (4) for auto-injection to save tokens.
+        // If the LLM needs something else, it will use request_tools (which casts a wider net).
+        matchedTools = searchTools(promptVector, connectedServerNames, config.pinnedTools, 0.35, 4);
+        console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
+        matchedTools.forEach(t => {
+          console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
+        });
+      } else {
+        console.error(`[LLM Proxy] Semantic prompt injection is disabled. Prompt embedding skipped.`);
+      }
 
       broadcastEvent({
         type: 'discovery_trace',
