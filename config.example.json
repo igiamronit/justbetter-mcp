@@ -1,5 +1,6 @@
 {
   "semanticPromptInjection": true,
+  "injectAllTools": false,
   "apiProvider": "gemini",
   "upstreamServers": [
     {

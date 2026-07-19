@@ -139,10 +139,10 @@ async function main() {
 
       console.error(`[request_tools] Fallback triggered with query: "${query}"`);
 
-      // Embed the LLM's refined query and search with a wider net (lower threshold), excluding pinned tools
+      // Embed the LLM's refined query and search without a threshold restriction, just taking top 4 matches
       const queryVector = await embed(query);
       const connectedServers = activeUpstreams.map(u => u.name);
-      const results = searchTools(queryVector, connectedServers, config.pinnedTools, 0.15, 10);
+      const results = searchTools(queryVector, connectedServers, config.pinnedTools, -1.0, 4);
 
       if (results.length === 0) {
         return {

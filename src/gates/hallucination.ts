@@ -27,6 +27,14 @@ export function validateToolCall(toolName: string, args: any, config: any): Gate
   // The 'request_tools' tool is always allowed (it's our safety net).
   if (toolName !== 'request_tools' && toolName !== 'batch_call' && !isToolInjected(toolName)) {
     console.error(`[Hallucination Gate] BLOCKED: LLM hallucinated call to non-injected tool: ${toolName}`);
+    
+    if (config.injectAllTools) {
+      return {
+        allowed: false,
+        error: `Tool '${toolName}' does not exist. You have ALL available tools loaded in your context. Please check your spelling against the provided tool schemas (e.g. hyphens vs underscores).`
+      };
+    }
+
     return {
       allowed: false,
       error: `Tool '${toolName}' is not currently available. Please use the 'request_tools' function to search for the right tool capabilities before calling them.`

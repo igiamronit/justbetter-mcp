@@ -364,9 +364,19 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           break;
         }
 
+        const injectedCount = response.headers.get('X-JustBetter-Injected-Count');
+        const injectedTools = response.headers.get('X-JustBetter-Injected-Tools');
+        if (turns === 1 && injectedCount) {
+          appendEvent({ turnId, type: 'system', text: `[Gateway] Auto-injected ${injectedCount} tools: ${injectedTools}` });
+        }
+
         const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
-        if (message.content) {
+        if (!message.content && toolCalls.length === 0) {
+          message.content = "[Empty response]";
+        }
+
+        if (message.content && message.content !== "[Empty response]") {
           appendEvent({ turnId, type: 'assistant', text: message.content });
         }
 

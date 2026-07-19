@@ -9,7 +9,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "search_web",
-        description: "Search the web for information using a lightweight search engine. Returns text summaries and URLs.",
+        description: "Search the web for information using a lightweight search engine. Returns text summaries and URLs. Useful for finding the latest documentation, developer info, news, or general web searches.",
         inputSchema: {
           type: "object",
           properties: {

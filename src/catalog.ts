@@ -192,6 +192,16 @@ export function getAllTools(): any[] {
 }
 
 /**
+ * Returns all active (non-quarantined) tools from connected servers.
+ * Used for full tool injection.
+ */
+export function getActiveTools(connectedServers: string[]): any[] {
+  if (connectedServers.length === 0) return [];
+  const placeholders = connectedServers.map(() => '?').join(',');
+  return db.prepare(`SELECT * FROM tools WHERE is_quarantined = 0 AND server_name IN (${placeholders})`).all(...connectedServers);
+}
+
+/**
  * Approves a quarantined tool by updating its stored fingerprint and unsetting the is_quarantined flag.
  */
 export function clearQuarantine(toolName: string, newFingerprint: string): void {

@@ -23,6 +23,13 @@
 
 ---
 
+### Quick Links
+- [Results (Token Efficiency Case Study)](#case-study-token-efficiency)
+- [Architecture & How It Works](#architecture--how-it-works)
+- [Setup & How to Use](#setup--quickstart)
+
+---
+
 ## Architecture & How It Works
 
 Because third-party AI clients (like Claude Desktop) tightly control their LLM API requests, it is often impossible to intercept the user's prompt before it reaches the AI. To solve this, JustBetter MCP operates in two distinct modes depending on your client.

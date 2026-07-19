@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import { embed } from './embeddings.js';
-import { searchTools, getToolByName, getAllToolSummaries, markToolInjected, getRecentlyInjectedTools } from './catalog.js';
+import { searchTools, getToolByName, getAllToolSummaries, markToolInjected, getRecentlyInjectedTools, getActiveTools } from './catalog.js';
 import type { Config } from './config.js';
 import { getEffectiveApiBase, getEffectiveApiKey } from './config.js';
 import { serverStatuses, activeUpstreams } from './upstream.js';
@@ -20,7 +20,7 @@ const REQUEST_TOOLS_SCHEMA = {
       properties: {
         query: {
           type: "string",
-          description: "A clear description of the tool capability you need"
+          description: "A clear description of the capability you need. IMPORTANT: Start your query with 'A tool to...' to ensure optimal semantic matching (e.g. 'A tool to search the web')."
         }
       },
       required: ["query"]
@@ -91,17 +91,42 @@ export function startLlmProxy(config: Config) {
       const connectedServerNames = activeUpstreams.map((u: any) => u.name);
 
       let matchedTools: any[] = [];
-      if (config.semanticPromptInjection) {
-        // Step 2: Embed the user prompt
-        const promptVector = await embed(userPrompt);
+      if (config.injectAllTools) {
+        matchedTools = getActiveTools(connectedServerNames);
+        console.error(`[LLM Proxy] Injecting ALL ${matchedTools.length} tools as requested (bypassing semantic search).`);
+      } else if (config.semanticPromptInjection) {
+        // Step 2: Chunk the prompt into sentences/clauses to prevent vector dilution on complex multi-intent prompts
+        const clauses = userPrompt.split(/(?<=[.!?])\s+|,\s+(?=and\s)/).filter((c: string) => c.trim().length > 3);
+        if (clauses.length === 0 && userPrompt.trim().length > 0) {
+          clauses.push(userPrompt.trim());
+        }
 
-        // Step 3: Search the catalog for semantically matching tools (excluding pinned tools to save compute)
-        // We use a strict threshold (0.35) and low topK (4) for auto-injection to save tokens.
-        // If the LLM needs something else, it will use request_tools (which casts a wider net).
-        matchedTools = searchTools(promptVector, connectedServerNames, config.pinnedTools, 0.35, 4);
-        console.error(`[LLM Proxy] Semantic search found ${matchedTools.length} tools:`);
+        const allMatchedTools: any[] = [];
+        
+        // Step 3: Embed each clause and search the catalog for semantically matching tools
+        for (const clause of clauses) {
+          const queryVector = await embed(clause);
+          // Unconditionally grab the top 5 matches for each clause
+          const results = searchTools(queryVector, connectedServerNames, config.pinnedTools, -1.0, 5);
+          allMatchedTools.push(...results);
+        }
+
+        // Deduplicate by max score, then sort descending and take top 5 overall
+        const deduped = new Map<string, any>();
+        for (const tool of allMatchedTools) {
+          const existing = deduped.get(tool.tool_name);
+          if (!existing || tool.score > existing.score) {
+            deduped.set(tool.tool_name, tool);
+          }
+        }
+
+        matchedTools = Array.from(deduped.values())
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5);
+
+        console.error(`[LLM Proxy] Semantic chunking found ${matchedTools.length} tools across ${clauses.length} clauses:`);
         matchedTools.forEach(t => {
-          console.error(`  - ${t.tool_name} (score: ${t.score.toFixed(4)})`);
+          console.error(`  - ${t.tool_name} (max score: ${t.score.toFixed(4)})`);
         });
       } else {
         console.error(`[LLM Proxy] Semantic prompt injection is disabled. Prompt embedding skipped.`);
@@ -240,6 +265,8 @@ Reference files by absolute path. No filler text before tool calls.`;
       // Step 8: Stream or return the response
       const contentType = realResponse.headers.get('content-type') || 'application/json';
       res.setHeader('Content-Type', contentType);
+      res.setHeader('X-JustBetter-Injected-Count', toolSchemas.length.toString());
+      res.setHeader('X-JustBetter-Injected-Tools', Array.from(injectedToolNames).join(', '));
       res.status(realResponse.status);
 
       if (body.stream) {
