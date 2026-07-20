@@ -150,17 +150,14 @@ async function main() {
         };
       }
 
-      // Return the matching tool schemas so the LLM knows what's available
-      const toolDescriptions = results.map(r => {
-        if (!passesPreconditions(r.tool_name, r.server_name, config)) {
-          return null; // Skip returning this tool if it fails preconditions
+      // Extract tool names and mark them as injected
+      const injectedToolNames: string[] = [];
+      for (const r of results) {
+        if (passesPreconditions(r.tool_name, r.server_name, config)) {
+          markToolInjected(r.tool_name);
+          injectedToolNames.push(r.tool_name);
         }
-        
-        const schema = JSON.parse(r.full_schema_json);
-        // Mark each discovered tool as injected so the Hallucination Gate allows calling them
-        markToolInjected(r.tool_name);
-        return `Tool: ${r.tool_name} (score: ${r.score.toFixed(3)})\nDescription: ${r.description}\nParameters: ${JSON.stringify(schema.inputSchema || schema.parameters, null, 2)}`;
-      }).filter(Boolean).join('\n\n---\n\n');
+      }
 
       console.error(`[request_tools] Returning ${results.length} tools to LLM (and marking as injectable)`);
 
@@ -173,7 +170,7 @@ async function main() {
       });
 
       return {
-        content: [{ type: "text", text: `Found ${results.length} matching tools:\n\n${toolDescriptions}` }],
+        content: [{ type: "text", text: `Success: Found ${injectedToolNames.length} matching tools (${injectedToolNames.join(', ')}). They have been seamlessly added to your environment. You may now call them natively on the next turn.` }],
       };
     }
 
