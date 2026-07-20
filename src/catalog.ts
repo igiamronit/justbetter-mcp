@@ -103,6 +103,23 @@ export async function indexTools(serverName: string, tools: any[]) {
     count++;
   }
 
+  // Sync phase: purge orphaned tools
+  const existingIds = db.prepare('SELECT id FROM tools WHERE server_name = ?').all(serverName) as {id: string}[];
+  const incomingIds = new Set(tools.map(t => `${serverName}:${t.name}`));
+  const orphanedIds = existingIds.filter(row => !incomingIds.has(row.id));
+
+  if (orphanedIds.length > 0) {
+    db.transaction(() => {
+      const deleteVecStmt = db.prepare('DELETE FROM vec_tools WHERE id = ?');
+      const deleteToolStmt = db.prepare('DELETE FROM tools WHERE id = ?');
+      for (const row of orphanedIds) {
+        deleteVecStmt.run(row.id);
+        deleteToolStmt.run(row.id);
+      }
+    })();
+    console.error(`Purged ${orphanedIds.length} orphaned tools for server ${serverName}`);
+  }
+
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
   console.error(`Indexed ${count} tools from ${serverName} in ${duration}s`);
 }
