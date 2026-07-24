@@ -17,26 +17,26 @@
 > This token-bloat problem leads to `node_modules` blowups, context limits being breached, and severely degraded tool selection accuracy.
 
 > **The Solution:** 
-> JustBetter MCP solves this by acting as a gateway/proxy. Instead of dumping every connected server's tools into every request, it intercepts the prompt, performs semantic search over the tool catalog, and injects *only* the relevant tools into the LLM API request. 
+> JustBetter MCP solves this by acting as a gateway/proxy. Instead of dumping every connected server's tools into every request, it uses dynamic, retrieval-based tool injection to limit the tools sent to the LLM. 
 >
-> *(Note: This architecture addresses the exact same problem Anthropic's MCP Tool Search and OpenAI Codex's tool search were built to solve, but implemented independently as a seamless local gateway. Unlike Anthropic's Tool Search and OpenAI Codex's equivalent, where the model itself decides when to search and composes its own query mid-conversation, this gateway performs semantic retrieval on the raw prompt before the first LLM call, trading some retrieval precision for zero extra round-trips on the common case.)*
+> It operates in two main modes: **Mode 2** is essentially equivalent to Anthropic's MCP Tool Search or OpenAI Codex's tool search, where the LLM reactively asks for tools mid-conversation. **Mode 1** is our custom approach that performs semantic retrieval on the raw prompt *before* the first LLM call. Mode 1 achieves almost the same results but can perform better, as the LLM doesn't have to spend inference time thinking about what tools to search for. For more details on this performance difference, see the [Case Study](#case-study-mode-1-vs-mode-2) section.
 
 ---
 
 ### Quick Links
-- [Results (Token Efficiency Case Study)](#case-study-token-efficiency)
 - [Architecture & How It Works](#architecture--how-it-works)
+- [Case Study (Mode 1 vs Mode 2)](#case-study-mode-1-vs-mode-2)
 - [Setup & How to Use](#setup--quickstart)
 
 ---
 
 ## Architecture & How It Works
 
-Because third-party AI clients (like Claude Desktop) tightly control their LLM API requests, it is often impossible to intercept the user's prompt before it reaches the AI. To solve this, JustBetter MCP operates in two distinct modes depending on your client.
+JustBetter MCP operates in two distinct modes depending on your configuration and client ecosystem.
 
-### Mode 1: The JustBetter CLI (Ideal Architecture)
+### Mode 1: Semantic Prompt Injection (JustBetter CLI)
 
-When using our custom Terminal App, the gateway acts as a dual-proxy. It intercepts the HTTP chat request, performs a semantic search on the prompt, and silently injects the exact tools needed into the payload *before* it reaches the LLM.
+When using the JustBetter CLI with semantic injection enabled (`"semanticPromptInjection": true`), the gateway acts as a dual-proxy. It intercepts the HTTP chat request, performs a semantic search on the prompt, and silently injects the exact tools needed into the payload *before* it reaches the LLM.
 
 #### Flowchart Style
 ```mermaid
@@ -89,11 +89,11 @@ sequenceDiagram
     MCP-->>CLI: Returns Result
 ```
 
-### Mode 2: Cursor & Claude Desktop (Reactive Fallback)
+### Mode 2: Reactive Tool Discovery (Cursor, Claude Desktop & CLI)
 
-**Why the difference?** In a perfect world (Mode 1), we search the catalog and inject schemas before the LLM ever sees the request, costing zero extra inference turns. However, closed-ecosystem clients like Claude Desktop do not allow you to reroute their core LLM API traffic through a local proxy. They only allow connecting standard MCP servers.
+This mode is used natively by third-party clients like Claude Desktop and Cursor, and can be enabled in the JustBetter CLI by setting `"semanticPromptInjection": false`.
 
-Since we cannot intercept the prompt for these clients, we employ a reactive fallback. We hide the massive catalog of upstream tools to prevent token bloat, and expose only a single `request_tools` primitive. The AI is forced to explicitly ask the Gateway for tools mid-conversation, trading one extra round-trip for massive context savings.
+In this mode, the gateway employs a reactive approach. It hides the massive catalog of upstream tools to prevent token bloat and exposes only a single `request_tools` primitive. The AI explicitly asks the Gateway for tools mid-conversation when needed. This mirrors the behavior of Anthropic's MCP Tool Search and OpenAI Codex's tool search, trading one extra round-trip for massive context savings.
 
 #### Flowchart Style
 ```mermaid
@@ -105,7 +105,7 @@ graph TD
     subgraph "Reactive Tool Discovery (MCP stdio)"
         Client -->|"3. call_tool('request_tools', query)"| MCPProxy["MCP Gateway Proxy"]
         MCPProxy <-->|"4. Semantic Search"| Catalog[("Tool Catalog (sqlite-vec)")]
-        MCPProxy -->|"5. Return Tool Schemas"| Client
+        MCPProxy -->|"5. Return Compact Acknowledgement"| Client
     end
     
     Client -->|"6. Next Turn: Execute Tool"| MCPProxy
@@ -134,7 +134,7 @@ sequenceDiagram
     Client->>MCP: call_tool('request_tools')
     MCP->>DB: Semantic Search
     DB-->>MCP: Top K Schemas
-    MCP-->>Client: Return Tool Schemas
+    MCP-->>Client: Return Compact Acknowledgement
     
     note over Client,Upstream: 3. Tool Execution
     Client->>LLM: Next Turn (with Schemas)
@@ -153,35 +153,40 @@ Regardless of which mode you use, all tool executions pass through strict safety
 
 ---
 
-## Case Study: Token Efficiency
+## Case Study: Mode 1 vs Mode 2
 
-**Model:** Mistral-Large  
-**Prompt:** *"Search the web for the current top 5 trending open-source LLM models. Create a new SQLite database file named ai_trends.db, create a table called models with columns for 'name' and 'description', and insert the 5 models you found. Finally, write a markdown file called summary.md in the current directory that lists the models and confirms the database was successfully updated."*  
-**Connected Servers:** Filesystem, SQLite, Websearch, Terminal  
+### Experiment Setup
+- **Model:** `mistral-large-latest`
+- **Connected Servers:** `filesystem`, `sqlite`, `websearch`, and `terminal`
+- **Mode 3 (Baseline):** For comparison, we establish Mode 3 as the baseline scenario where semantic search is completely bypassed, and every available tool from all connected upstream servers is dumped directly into the context window.
 
-**Why this prompt?**  
-This prompt was specifically chosen because it forces a multi-step, multi-server workflow. It requires web access, database operations, and filesystem writes. Normally, this forces the gateway to dump every single tool from all four MCP servers into the context window at once, creating a massive token payload. 
+### Prompt 1: Multi-Step Sequential Execution
 
-### Trace & Token Usage Comparison
+**Prompt:** *"Run these one at a time, confirming the output of each before moving to the next: check the Node version, list the top-level npm packages installed, and check the current git status. Once you've confirmed all three, search the web for the current Node.js LTS version and tell me whether I should upgrade based on what you found."*
 
-| Configuration | Token Usage | Context Savings |
-| :--- | :--- | :--- |
-| **OpenCode (Unoptimized, same servers)** | 133.9K | Base |
-| **OpenCode (Default tools)** | 125.5K | +6.27% |
-| **JustBetter MCP (Injection Disabled / Fallback Only)** | **116.9K** | **+12.7%** |
-| **JustBetter MCP (Dynamic Injection)** | **74.5K** | **+44.3%** |
+**Total Token Usage:**
 
-*Note: The massive gap between the last two configurations explicitly proves that dynamic semantic injection works by reducing the cognitive load on the LLM. Without it, the LLM wastes significant tokens thinking, planning, and explicitly requesting tools across extra turns. Dynamic injection eliminates this overhead entirely by handing the LLM exactly what it needs on turn 1.*
+<div align="center">
+  <img src="./charts/prompt1_tokens.png" alt="Token Usage Comparison for Prompt 1" width="800" />
+</div>
 
-*Caveat:* This is an early result on a single-task scope with a relatively small setup. The OpenCode token count also includes harness-overhead confounds, but the trend clearly demonstrates the context savings of dynamic injection.
+### Prompt 2: Multi-Domain Knowledge Retrieval
+
+**Prompt:** *"Search the web for the latest release notes of the Model Context Protocol, check the open issues on the modelcontextprotocol/servers GitHub repo, and insert a summary row into a sqlite table called 'digest' (with columns 'source' and 'summary') for each of the two things you found."*
+
+**Total Token Usage:**
+
+<div align="center">
+  <img src="./charts/prompt2_tokens.png" alt="Token Usage Comparison for Prompt 2" width="800" />
+</div>
 
 ---
 
-## Honest Limitations & Caveats
+## Interpretations & Caveats
 
-- **Retrieval is on Raw Prompt Text:** Semantic search uses the raw user prompt, not model-composed queries. If the user prompt is vague, retrieval might miss initially (though the `request_tools` fallback catches this).
-- **Scaling Savings:** Context token savings scale massively with large catalogs (e.g., Playwright + GitHub + DB), but shrink or become negligible on very small setups or short sessions where the tool schemas are small anyway.
-- **Conversation History Pruning:** The conversation history itself isn't pruned yet, meaning long-running agentic loops will still eventually hit context limits from message history alone, even if the tools array is optimized.
+1. **Mode 1 vs. Mode 2 Performance:** Both Mode 1 (Semantic Injection) and Mode 2 (Reactive Discovery) achieve almost identical, highly optimized token efficiency. However, **Mode 1** holds a distinct advantage in output quality for complex or long-running tasks. By handling the semantic search and schema injection seamlessly in the proxy *before* inference, it eliminates the cognitive overhead of forcing the LLM to pause and reason about *which* tool to search for, preserving its reasoning capacity for solving the actual user task.
+2. **The Inject-All Baseline (Mode 3):** As expected, simply dumping every available tool from all connected MCP servers directly into the prompt (Mode 3) performs the worst, consuming massive amounts of context and dragging down overall efficiency.
+3. **OpenCode Comparison:** While OpenCode exhibits the highest token usage in these tests, an important caveat is that OpenCode's environment includes extensive built-in system prompts and default native tools that contribute to its token count. While it's not a perfect apples-to-apples comparison purely on tool overhead, it serves as a highly relevant real-world benchmark for the token-bloat problem JustBetter MCP was designed to solve.
 
 ---
 
@@ -196,27 +201,66 @@ Create a `config.json` in the project root. Here is an example format detailing 
 
 ```json
 {
-  "semanticPromptInjection": true,
+  "semanticPromptInjection": false,
+  "injectAllTools": false,
   "apiProvider": "mistral",
-  "llmProxy": {
-    "port": 4141,
-    "geminiApiKey": "YOUR_GEMINI_API_KEY",
-    "mistralApiKey": "YOUR_MISTRAL_API_KEY",
-    "model": "mistral-large-latest"
-  },
-  "pinnedTools": ["request_tools"],
-  "destructiveTools": ["delete_file", "drop_table"],
   "upstreamServers": [
     {
       "name": "filesystem",
       "command": "npx.cmd",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./"]
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "./"
+      ]
     },
     {
       "name": "sqlite",
       "command": "npx.cmd",
-      "args": ["-y", "mcp-server-sqlite-npx", "database.db"]
+      "args": [
+        "-y",
+        "mcp-server-sqlite-npx",
+        "database.db"
+      ]
+    },
+    {
+      "name": "websearch",
+      "command": "npx.cmd",
+      "args": [
+        "tsx",
+        "src/websearch-server.ts"
+      ]
+    },
+    {
+      "name": "terminal",
+      "command": "npx.cmd",
+      "args": [
+        "tsx",
+        "src/terminal-server.ts"
+      ]
+    },
+    {
+      "name": "github",
+      "command": "npx.cmd",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "YOUR_GITHUB_PAT"
+      }
     }
+  ],
+  "llmProxy": {
+    "port": 4141,
+    "geminiApiKey": "YOUR_GEMINI_API_KEY",
+    "mistralApiKey": "YOUR_MISTRAL_API_KEY",
+    "model": "mistral-large-2512"
+  },
+  "pinnedTools": [],
+  "destructiveTools": [
+    "delete_file",
+    "drop_table"
   ]
 }
 ```
