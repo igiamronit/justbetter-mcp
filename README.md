@@ -19,13 +19,13 @@
 > **The Solution:** 
 > JustBetter MCP solves this by acting as a gateway/proxy. Instead of dumping every connected server's tools into every request, it uses dynamic, retrieval-based tool injection to limit the tools sent to the LLM. 
 >
-> It operates in two main modes: **Mode 2** is essentially equivalent to Anthropic's MCP Tool Search or OpenAI Codex's tool search, where the LLM reactively asks for tools mid-conversation. **Mode 1** is our custom approach that performs semantic retrieval on the raw prompt *before* the first LLM call. Mode 1 achieves almost the same results but can perform better, as the LLM doesn't have to spend inference time thinking about what tools to search for. For more details on this performance difference, see the [Case Study](#case-study-mode-1-vs-mode-2) section.
+> It operates in two main modes: **Mode 2** is essentially equivalent to Anthropic's MCP Tool Search or OpenAI Codex's tool search, where the LLM reactively asks for tools mid-conversation. **Mode 1** is our custom approach that performs semantic retrieval on the raw prompt *before* the first LLM call. Mode 1 achieves almost the same results but can perform better, as the LLM doesn't have to spend inference time thinking about what tools to search for. For more details on this performance difference, see the [Token Usage Analysis](#token-usage-analysis) section.
 
 ---
 
 ### Quick Links
 - [Architecture & How It Works](#architecture--how-it-works)
-- [Case Study (Mode 1 vs Mode 2)](#case-study-mode-1-vs-mode-2)
+- [Token Usage Analysis](#token-usage-analysis)
 - [Setup & How to Use](#setup--quickstart)
 
 ---
@@ -153,7 +153,7 @@ Regardless of which mode you use, all tool executions pass through strict safety
 
 ---
 
-## Case Study: Mode 1 vs Mode 2
+## Token Usage Analysis
 
 ### Experiment Setup
 - **Model:** `mistral-large-latest`
@@ -184,9 +184,10 @@ Regardless of which mode you use, all tool executions pass through strict safety
 
 ## Interpretations & Caveats
 
-1. **Mode 1 vs. Mode 2 Performance:** Both Mode 1 (Semantic Injection) and Mode 2 (Reactive Discovery) achieve almost identical, highly optimized token efficiency. However, **Mode 1** holds a distinct advantage in output quality for complex or long-running tasks. By handling the semantic search and schema injection seamlessly in the proxy *before* inference, it eliminates the cognitive overhead of forcing the LLM to pause and reason about *which* tool to search for, preserving its reasoning capacity for solving the actual user task.
+1. **Mode 1 vs. Mode 2 Performance:** Both Mode 1 (Semantic Injection) and Mode 2 (Reactive Discovery) achieve almost identical, highly optimized token efficiency. However, **Mode 1** holds a theoretical advantage in output quality for complex or long-running tasks. By handling the semantic search and schema injection seamlessly in the proxy *before* inference, it eliminates the cognitive overhead of forcing the LLM to pause and reason about *which* tool to search for, preserving its reasoning capacity for solving the actual user task.
 2. **The Inject-All Baseline (Mode 3):** As expected, simply dumping every available tool from all connected MCP servers directly into the prompt (Mode 3) performs the worst, consuming massive amounts of context and dragging down overall efficiency.
 3. **OpenCode Comparison:** While OpenCode exhibits the highest token usage in these tests, an important caveat is that OpenCode's environment includes extensive built-in system prompts and default native tools that contribute to its token count. While it's not a perfect apples-to-apples comparison purely on tool overhead, it serves as a highly relevant real-world benchmark for the token-bloat problem JustBetter MCP was designed to solve.
+4. **Future Work on Output Quality:** While reducing cognitive load in Mode 1 should theoretically translate to measurable improvements in LLM reasoning capacity and overall output quality, we have not yet conducted rigorous quantitative testing to conclusively prove this impact. Validating this hypothesis remains a key topic for future work.
 
 ---
 
