@@ -37,3 +37,7 @@ tests/test-config.json
 report.tex
 FINDINGS.md
 RELEASE.md
+NEXT-SESSION.md
+
+# npm pack output
+*.tgz

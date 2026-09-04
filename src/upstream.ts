@@ -5,6 +5,9 @@ import { resolveServerEnv, UpstreamServerSchema } from "./config.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { indexTools } from "./catalog.js";
 import { PACKAGE_ROOT } from "./paths.js";
+import path from "path";
+import fs from "fs";
+import os from "os";
 
 export interface UpstreamServer {
   name: string;
@@ -14,6 +17,38 @@ export interface UpstreamServer {
 
 export const activeUpstreams: UpstreamServer[] = [];
 export const serverStatuses: Record<string, 'connected' | 'failed'> = {};
+
+/**
+ * Node launchers are batch shims on Windows ("npx.cmd") and bare executables
+ * everywhere else. A config written on one OS therefore fails to spawn a single
+ * upstream on the other. Normalising at connect time repairs configs copied
+ * between machines, which happens the moment two people share a setup.
+ */
+const SHIMMED_COMMANDS = ["npx", "npm", "yarn", "pnpm", "bunx"];
+
+export function normaliseCommand(command: string): string {
+  const bare = command.toLowerCase().endsWith(".cmd") ? command.slice(0, -4) : command;
+  if (!SHIMMED_COMMANDS.includes(bare.toLowerCase())) return command;
+  return process.platform === "win32" ? bare + ".cmd" : bare;
+}
+
+/**
+ * Upstream args are often written relative to the gateway ("tsx", "src/terminal-server.ts").
+ * Those used to resolve because the child was spawned with the package root as its cwd --
+ * which on Windows pins a handle on the install directory and makes `npm install -g` fail
+ * with EBUSY while any server is alive. Resolving the paths here keeps those configs
+ * working while the child runs somewhere disposable.
+ *
+ * Only an arg naming something that really exists in the package is rewritten, so flags
+ * ("-y") and package names ("@modelcontextprotocol/server-filesystem") pass through.
+ */
+export function resolveServerArgs(args: string[]): string[] {
+  return args.map(arg => {
+    if (!arg || arg.startsWith("-") || path.isAbsolute(arg)) return arg;
+    const candidate = path.resolve(PACKAGE_ROOT, arg);
+    return fs.existsSync(candidate) ? candidate : arg;
+  });
+}
 
 export async function connectSingleUpstream(rawServerConfig: any): Promise<void> {
   // Validate before spawning. This function turns config into a child process, so it
@@ -28,9 +63,9 @@ export async function connectSingleUpstream(rawServerConfig: any): Promise<void>
     // src/terminal-server.ts") only starts when the gateway happens to have been
     // launched from the repo — so those servers vanish under Claude Desktop or Cursor.
     const transport = new StdioClientTransport({
-      command: serverConfig.command,
-      args: serverConfig.args,
-      cwd: serverConfig.cwd ?? PACKAGE_ROOT,
+      command: normaliseCommand(serverConfig.command),
+      args: resolveServerArgs(serverConfig.args),
+      cwd: serverConfig.cwd ?? os.tmpdir(),
       env: { ...process.env, ...(resolveServerEnv(serverConfig.env) || {}) } as Record<string, string>,
     });
 

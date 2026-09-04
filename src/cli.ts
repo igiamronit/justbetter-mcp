@@ -7,9 +7,9 @@ import {
   smartTruncate, toolContentToText, pruneMessages, resolveProxyUrl,
   resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
 } from "./agent-common.js";
-import { PACKAGE_ROOT, packagePath } from "./paths.js";
+import { PACKAGE_ROOT, packagePath, resolveConfigPath } from "./paths.js";
 
-const configPath = path.resolve(process.argv[2] || "config.json");
+const configPath = resolveConfigPath(process.argv[2]);
 let cliConfig: any = {};
 try {
   cliConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
@@ -181,6 +181,7 @@ async function runAgenticLoop() {
 async function start() {
   console.log("🚀 Starting JustBetter CLI...");
   
+  console.log(`Config: ${configPath}`);
   if (!cliConfig.llmProxy) {
     console.warn(`[Warning] No llmProxy block found in ${configPath}. CLI requires this to function!`);
   }
@@ -190,11 +191,10 @@ async function start() {
   //    package root as its cwd, so `justbetter-cli` works from any directory.
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [
-      packagePath("node_modules", "tsx", "dist", "cli.mjs"),
-      packagePath("src", "proxy.ts"),
-      configPath
-    ],
+    // Go through bin/cli.js rather than invoking tsx directly: it is the single
+    // place that knows how to locate the tsx runtime across hoisted and nested
+    // node_modules layouts.
+    args: [packagePath("bin", "cli.js"), "gateway", configPath],
     cwd: PACKAGE_ROOT,
     env: process.env as Record<string, string> // Inherit env vars (secrets, etc)
   });

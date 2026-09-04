@@ -103,6 +103,16 @@ export function getEffectiveApiKey(config: Config): string {
 }
 
 /**
+ * True when the resolved provider key is missing or still the shipped placeholder.
+ * Editing the wrong config file otherwise surfaces only as an "invalid API key"
+ * error from the provider, which gives the user nothing to act on.
+ */
+export function isPlaceholderApiKey(config: Config): boolean {
+  const key = getEffectiveApiKey(config);
+  return !key || /^YOUR-/i.test(key);
+}
+
+/**
  * Expands ${NAME} references in upstream env values against process.env and the
  * global secrets file, so an upstream server can be configured with a placeholder
  * instead of a literal token committed to config.json.

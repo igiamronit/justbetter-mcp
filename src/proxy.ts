@@ -2,7 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import path from "path";
-import { loadConfig } from "./config.js";
+import { loadConfig, isPlaceholderApiKey } from "./config.js";
 import type { Config } from "./config.js";
 import { searchTools, markToolInjected } from "./catalog.js";
 import { embed } from "./embeddings.js";
@@ -13,6 +13,7 @@ import { resolveGroupedCall } from "./grouping.js";
 import { startDashboard, broadcastEvent } from "./dashboard/server.js";
 import { activeUpstreams, connectAllUpstreams } from "./upstream.js";
 import { passesPreconditions } from "./gates/precondition.js";
+import { resolveConfigPath } from "./paths.js";
 
 // Silence background logs if running under the TUI
 if (process.env.SILENCE_LOGS === "1") {
@@ -57,6 +58,9 @@ const BATCH_CALL_MCP_SCHEMA = {
     required: ["calls"]
   }
 };
+
+/** Resolves once the initial upstream connect-and-index pass has settled. */
+let upstreamsReady: Promise<void> = Promise.resolve();
 
 /**
  * Executes a single tool call through the full security and dispatch pipeline.
@@ -111,21 +115,28 @@ async function executeSingleTool(toolName: string, args: any, config: Config) {
 async function main() {
   // Resolved against the launch directory once, so every later read/write of the config
   // hits the same file even though the dashboard and upstreams run with their own cwd.
-  const configPath = path.resolve(process.argv[2] || "config.json");
+  const configPath = resolveConfigPath(process.argv[2]);
 
   // 1. Load config first, then boot the Dashboard before the slow upstream connect
   //    so the management UI is reachable while servers are still coming up.
   const config = loadConfig(configPath);
 
+  // Name the file in play. An installed copy reads ~/.justbetter-mcp/config.json,
+  // not the config.json in a checkout, and the only symptom of editing the wrong one
+  // is an "invalid API key" error from the provider that points nowhere.
+  console.error(`[Proxy] Config: ${configPath}`);
+  if (config.llmProxy?.enabled !== false && isPlaceholderApiKey(config)) {
+    console.error(`[Proxy] No usable ${config.apiProvider} API key in that file.`);
+    console.error(`[Proxy] Mode 1 (chat) will fail until llmProxy.${config.apiProvider}ApiKey is set. Mode 2 (tool discovery) is unaffected.`);
+  }
+
   const dashboardServer = config.dashboard?.enabled === false
     ? undefined
     : startDashboard(configPath, config);
 
-  // 2. Connect to upstreams (soft-failing on errors)
-  await connectAllUpstreams(config);
-
   // Phase 3: Start the LLM API Proxy (Mode 1). Mode 2 clients never touch it, so a
   // config can switch it off rather than holding a port and an API key for nothing.
+  // Neither this nor the dashboard depends on upstreams, so both come up first.
   const llmProxyServer = config.llmProxy?.enabled === false ? undefined : startLlmProxy(config);
 
   const server = new Server(
@@ -154,6 +165,10 @@ async function main() {
       }
 
       console.error(`[request_tools] Fallback triggered with query: "${query}"`);
+
+      // First call on a cold start can land while upstreams are still indexing.
+      // Waiting is correct; returning "nothing found" would train the model to stop asking.
+      await upstreamsReady;
 
       // Embed the LLM's refined query and search without a threshold restriction, just taking top 4 matches
       const queryVector = await embed(query);
@@ -264,6 +279,16 @@ async function main() {
   await server.connect(transport);
 
   console.error("JustBetter MCP Gateway is running."); // Using stderr to avoid breaking stdio MCP transport
+
+  // Upstream connection is deliberately started AFTER the transport is live and is
+  // not awaited here. On a cold install, indexing downloads an ~80MB embedding model
+  // and takes far longer than an MCP client's initialize timeout -- so a client that
+  // waited for it would give up and report the gateway as failed to start.
+  // tools/list is static, so it can be answered immediately; request_tools awaits
+  // this promise instead, which is the only handler that needs a populated catalog.
+  upstreamsReady = connectAllUpstreams(config).catch(err => {
+    console.error("[Proxy] Upstream connection failed:", err?.message ?? err);
+  });
 }
 
 main().catch(err => {

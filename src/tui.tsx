@@ -9,9 +9,10 @@ import {
   smartTruncate, toolContentToText, pruneMessages, resolveProxyUrl,
   resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
 } from './agent-common.js';
-import { PACKAGE_ROOT, packagePath } from './paths.js';
+import { PACKAGE_ROOT, packagePath, resolveConfigPath } from './paths.js';
+import { isPlaceholderApiKey } from './config.js';
 
-const configPath = path.resolve(process.argv[2] || 'config.json');
+const configPath = resolveConfigPath(process.argv[2]);
 let cliConfig: any = {};
 try {
   cliConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -19,7 +20,46 @@ try {
   // The proxy will surface config errors if they matter at runtime.
 }
 
-const PROXY_URL = resolveProxyUrl(cliConfig);
+/** Recomputed on demand: the setup wizard can change proxy settings at runtime. */
+const proxyUrl = () => resolveProxyUrl(cliConfig);
+
+const PROVIDERS = ['gemini', 'mistral'] as const;
+type Provider = (typeof PROVIDERS)[number];
+
+const PROVIDER_LABEL: Record<Provider, string> = {
+  gemini: 'Google Gemini',
+  mistral: 'Mistral',
+};
+
+const PROVIDER_KEY_FIELD: Record<Provider, string> = {
+  gemini: 'geminiApiKey',
+  mistral: 'mistralApiKey',
+};
+
+const PROVIDER_DEFAULT_MODEL: Record<Provider, string> = {
+  gemini: 'gemini-2.0-flash',
+  mistral: 'mistral-large-latest',
+};
+
+const PROVIDER_KEY_URL: Record<Provider, string> = {
+  gemini: 'aistudio.google.com/apikey',
+  mistral: 'console.mistral.ai/api-keys',
+};
+
+/** True when the config cannot drive a chat turn yet, so the wizard runs first. */
+function configNeedsSetup(): boolean {
+  return !cliConfig.llmProxy || isPlaceholderApiKey(cliConfig);
+}
+
+/** Writes cliConfig back to disk. Returns an error message, or null on success. */
+function persistConfig(): string | null {
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(cliConfig, null, 2), 'utf-8');
+    return null;
+  } catch (e: any) {
+    return e?.message ?? String(e);
+  }
+}
 
 const INITIAL_LLM_MESSAGES = [{ role: 'system', content: 'JUSTBETTER_CLI_AGENT' }];
 const MAX_TURNS = 20;
@@ -40,6 +80,13 @@ type UiEvent = {
   content?: string;
   isError?: boolean;
 };
+
+const STARTUP_EVENTS: UiEvent[] = (() => {
+  const seeded: UiEvent[] = [
+    { id: 'startup-config', type: 'system', text: `Config: ${configPath}` }
+  ];
+  return seeded;
+})();
 
 type TranscriptLine = {
   text: string;
@@ -207,14 +254,129 @@ function StatusBar({ isBusy, connected, isPinnedToBottom }: { isBusy: boolean; c
   );
 }
 
+/**
+ * First-run configuration. Runs before the gateway is booted, because starting the
+ * LLM proxy against a placeholder key just produces an "invalid API key" error from
+ * the provider with no indication of which file to edit.
+ */
+export function SetupWizard({ onComplete }: { onComplete: (summary: string[]) => void }) {
+  const configured = String(cliConfig.apiProvider ?? '');
+  const initialProvider: Provider =
+    (PROVIDERS as readonly string[]).includes(configured) ? (configured as Provider) : 'gemini';
+
+  const [step, setStep] = useState<'provider' | 'key' | 'model'>('provider');
+  const [cursor, setCursor] = useState(Math.max(0, PROVIDERS.indexOf(initialProvider)));
+  const [provider, setProvider] = useState<Provider>(initialProvider);
+  const [keyValue, setKeyValue] = useState('');
+  const [modelValue, setModelValue] = useState('');
+  const [error, setError] = useState('');
+
+  useInput((input, key) => {
+    if (key.upArrow) { setCursor(c => (c + PROVIDERS.length - 1) % PROVIDERS.length); return; }
+    if (key.downArrow) { setCursor(c => (c + 1) % PROVIDERS.length); return; }
+    const typed = Number(input);
+    if (typed >= 1 && typed <= PROVIDERS.length) { setCursor(typed - 1); return; }
+    if (key.return) {
+      const chosen = PROVIDERS[cursor] as Provider;
+      const existingKey = cliConfig.llmProxy?.[PROVIDER_KEY_FIELD[chosen]];
+      const keptProvider = chosen === cliConfig.apiProvider;
+      setProvider(chosen);
+      // Carry a real key over so re-running setup is not a retype; skip placeholders.
+      setKeyValue(existingKey && !/^YOUR-/i.test(existingKey) ? existingKey : '');
+      // Only reuse the configured model when the provider is unchanged. Carrying it
+      // across a switch is exactly how a Mistral model name ended up under Gemini.
+      setModelValue((keptProvider && cliConfig.llmProxy?.model) || PROVIDER_DEFAULT_MODEL[chosen]);
+      setStep('key');
+    }
+  }, { isActive: step === 'provider' });
+
+  const submitKey = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || /^YOUR-/i.test(trimmed)) {
+      setError('A real API key is required. Paste one to continue.');
+      return;
+    }
+    setError('');
+    setKeyValue(trimmed);
+    setStep('model');
+  };
+
+  const submitModel = (value: string) => {
+    const model = value.trim() || PROVIDER_DEFAULT_MODEL[provider];
+    if (!cliConfig.llmProxy) {
+      cliConfig.llmProxy = { enabled: true, port: 4141, host: '127.0.0.1' };
+    }
+    cliConfig.apiProvider = provider;
+    cliConfig.llmProxy[PROVIDER_KEY_FIELD[provider]] = keyValue;
+    cliConfig.llmProxy.model = model;
+
+    const err = persistConfig();
+    onComplete(err
+      ? [`Could not save config: ${err}`]
+      : [`Provider: ${PROVIDER_LABEL[provider]}`, `Model: ${model}`, `Saved to ${configPath}`]);
+  };
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Text color="cyan" bold>JustBetter setup</Text>
+      <Text dimColor>{configPath}</Text>
+      <Box height={1} />
+
+      {step === 'provider' ? (
+        <Box flexDirection="column">
+          <Text>Which API provider should power the chat?</Text>
+          <Box height={1} />
+          {PROVIDERS.map((option, index) => (
+            <Text key={option} {...(index === cursor ? { color: 'green' } : {})}>
+              {index === cursor ? '>' : ' '} {index + 1}. {PROVIDER_LABEL[option]}
+            </Text>
+          ))}
+          <Box height={1} />
+          <Text dimColor>Up/Down or a number to choose, Enter to confirm.</Text>
+        </Box>
+      ) : null}
+
+      {step === 'key' ? (
+        <Box flexDirection="column">
+          <Text>Paste your {PROVIDER_LABEL[provider]} API key.</Text>
+          <Text dimColor>Get one at {PROVIDER_KEY_URL[provider]}</Text>
+          <Box height={1} />
+          <Box>
+            <Text color="blue" bold>Key {'>'} </Text>
+            <TextInput
+              value={keyValue}
+              onChange={value => { setKeyValue(value); if (error) setError(''); }}
+              onSubmit={submitKey}
+              mask="*"
+            />
+          </Box>
+          {error ? <Text color="red">{error}</Text> : null}
+        </Box>
+      ) : null}
+
+      {step === 'model' ? (
+        <Box flexDirection="column">
+          <Text>Which model? Enter accepts the default.</Text>
+          <Box height={1} />
+          <Box>
+            <Text color="blue" bold>Model {'>'} </Text>
+            <TextInput value={modelValue} onChange={setModelValue} onSubmit={submitModel} />
+          </Box>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
 function App({ mcpClient }: { mcpClient: Client | null }) {
   const [llmMessages, setLlmMessages] = useState<any[]>(INITIAL_LLM_MESSAGES);
-  const [events, setEvents] = useState<UiEvent[]>([]);
+  const [events, setEvents] = useState<UiEvent[]>(STARTUP_EVENTS);
   const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(() => new Set());
   const [isBusy, setIsBusy] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [scrollTopLine, setScrollTopLine] = useState(0);
   const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
+  const [phase, setPhase] = useState<'setup' | 'chat'>(configNeedsSetup() ? 'setup' : 'chat');
   const { stdout } = useStdout();
 
   const terminalRows = stdout.rows || 24;
@@ -235,6 +397,21 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
 
   const replaceEvent = (id: string, event: UiEvent) => {
     setEvents(prev => prev.map(item => item.id === id ? event : item));
+  };
+
+  const restartGateway = (reason: string) => {
+    appendEvent({ type: 'system', text: reason });
+    void bootGateway().then(err => {
+      appendEvent(err
+        ? { type: 'system', isError: true, text: `Gateway failed to start: ${err}` }
+        : { type: 'system', text: 'Gateway ready.' });
+    });
+  };
+
+  const finishSetup = (summary: string[]) => {
+    for (const line of summary) appendEvent({ type: 'system', text: line });
+    setPhase('chat');
+    restartGateway('Starting gateway...');
   };
 
   useInput((input, key) => {
@@ -277,10 +454,10 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         return next;
       });
     }
-  });
+  }, { isActive: phase === 'chat' });
 
   useEffect(() => {
-    if (mcpClient) setIsConnected(true);
+    setIsConnected(Boolean(mcpClient));
   }, [mcpClient]);
 
   useEffect(() => {
@@ -315,7 +492,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           headers['X-JustBetter-Token'] = cliConfig.llmProxy.authToken;
         }
 
-        const response = await fetch(PROXY_URL, {
+        const response = await fetch(proxyUrl(), {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -477,6 +654,11 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         process.exit(0);
       }
 
+      if (text === '/setup') {
+        setPhase('setup');
+        return;
+      }
+
       if (text === '/clear') {
         setLlmMessages(INITIAL_LLM_MESSAGES);
         setEvents([]);
@@ -497,12 +679,14 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           `  Model:        ${llm.model || '(not set)'}`,
           ``,
           `Commands:`,
+          `  /setup                              re-run the guided setup`,
           `  /config set provider gemini|mistral`,
           `  /config set gemini-key <key>`,
           `  /config set mistral-key <key>`,
           `  /config set model <name>`,
-          `  /config save`,
-          `  /config reload`,
+          `  /config reload                      discard edits, re-read file`,
+          ``,
+          `Changes are saved and applied immediately.`,
         ];
         for (const line of lines) {
           appendEvent({ type: 'system', text: line });
@@ -520,28 +704,37 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         const key = setting.slice(0, spaceIdx);
         const value = setting.slice(spaceIdx + 1);
 
+        if (key === 'provider' && value !== 'gemini' && value !== 'mistral') {
+          appendEvent({ type: 'system', text: 'Provider must be "gemini" or "mistral"' });
+          return;
+        }
+
+        if (key !== 'provider' && !cliConfig.llmProxy) {
+          cliConfig.llmProxy = { enabled: true, port: 4141, host: '127.0.0.1' };
+        }
+
         if (key === 'provider') {
-          if (value !== 'gemini' && value !== 'mistral') {
-            appendEvent({ type: 'system', text: 'Provider must be "gemini" or "mistral"' });
-            return;
-          }
           cliConfig.apiProvider = value;
-          appendEvent({ type: 'system', text: `Provider set to ${value} (restart proxy to take effect)` });
         } else if (key === 'gemini-key') {
-          if (!cliConfig.llmProxy) cliConfig.llmProxy = {};
           cliConfig.llmProxy.geminiApiKey = value;
-          appendEvent({ type: 'system', text: 'Gemini API key updated (restart proxy to take effect)' });
         } else if (key === 'mistral-key') {
-          if (!cliConfig.llmProxy) cliConfig.llmProxy = {};
           cliConfig.llmProxy.mistralApiKey = value;
-          appendEvent({ type: 'system', text: 'Mistral API key updated (restart proxy to take effect)' });
         } else if (key === 'model') {
-          if (!cliConfig.llmProxy) cliConfig.llmProxy = {};
           cliConfig.llmProxy.model = value;
-          appendEvent({ type: 'system', text: `Model set to ${value}` });
         } else {
           appendEvent({ type: 'system', text: `Unknown setting: ${key}` });
+          return;
         }
+
+        // Saving and restarting here is the point: a setting that needs two further
+        // commands to take effect is how someone ends up staring at a stale API key.
+        const saveError = persistConfig();
+        if (saveError) {
+          appendEvent({ type: 'system', isError: true, text: `Could not save config: ${saveError}` });
+          return;
+        }
+        appendEvent({ type: 'system', text: `${key} updated and saved to ${configPath}` });
+        restartGateway('Restarting gateway to apply...');
         return;
       }
 
@@ -581,6 +774,10 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
     setIsBusy(false);
   };
 
+  if (phase === 'setup') {
+    return <SetupWizard onComplete={finishSetup} />;
+  }
+
   return (
     <Box flexDirection="column">
       <Box height={transcriptHeight} overflow="hidden" flexDirection="column" justifyContent="flex-end">
@@ -608,37 +805,65 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
   );
 }
 
-async function start() {
-  let mcpClient: Client | null = null;
-  const { waitUntilExit, rerender } = render(<App mcpClient={mcpClient} />, { alternateScreen: true });
+let gatewayClient: Client | null = null;
+let rerenderApp: () => void = () => {};
+
+/**
+ * Starts, or restarts, the gateway child process and waits for its LLM proxy.
+ * Restarting is what lets a change made in the TUI take effect without quitting:
+ * the proxy reads its provider, key and model once, at boot.
+ * Returns an error message, or null on success.
+ */
+export async function bootGateway(): Promise<string | null> {
+  if (gatewayClient) {
+    try { await gatewayClient.close(); } catch { /* child already gone */ }
+    gatewayClient = null;
+    rerenderApp();
+  }
 
   try {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [
-        packagePath('node_modules', 'tsx', 'dist', 'cli.mjs'),
-        packagePath('src', 'proxy.ts'),
-        configPath
-      ],
+      // Go through bin/cli.js rather than invoking tsx directly: it is the single
+      // place that knows how to locate the tsx runtime across hoisted and nested
+      // node_modules layouts.
+      args: [packagePath('bin', 'cli.js'), 'gateway', configPath],
       cwd: PACKAGE_ROOT,
       env: { ...(process.env as Record<string, string>), SILENCE_LOGS: '1' }
     });
 
-    mcpClient = new Client({ name: 'justbetter-tui', version: '1.0.0' }, { capabilities: {} });
-    await mcpClient.connect(transport);
+    const client = new Client({ name: 'justbetter-tui', version: '1.0.0' }, { capabilities: {} });
+    await client.connect(transport);
     await waitForProxy(resolveProxyBase(cliConfig));
-    rerender(<App mcpClient={mcpClient} />);
+    gatewayClient = client;
+    rerenderApp();
+    return null;
   } catch (e: any) {
-    // Keep the TUI alive; the status bar will remain in connecting state.
+    return e?.message ?? String(e);
+  }
+}
+
+async function start() {
+  const { waitUntilExit, rerender } = render(<App mcpClient={gatewayClient} />, { alternateScreen: true });
+  rerenderApp = () => rerender(<App mcpClient={gatewayClient} />);
+
+  // A config that cannot chat yet goes to the wizard first. Booting now would start
+  // the LLM proxy against a placeholder key and fail with a provider-side error.
+  if (!configNeedsSetup()) {
+    await bootGateway();
   }
 
   await waitUntilExit();
 }
 
-start().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+// Importing this module for a test should not take over the terminal. Anything
+// other than the opt-out runs the TUI exactly as before.
+if (process.env.JUSTBETTER_TUI_NO_AUTOSTART !== '1') {
+  start().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}
 
 // Robust cleanup on Windows to ensure orphan processes (like node.exe spawned by npx.cmd) die
 process.on('SIGINT', () => {
