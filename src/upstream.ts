@@ -1,8 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Config } from "./config.js";
+import { resolveServerEnv, UpstreamServerSchema } from "./config.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { indexTools } from "./catalog.js";
+import { PACKAGE_ROOT } from "./paths.js";
 
 export interface UpstreamServer {
   name: string;
@@ -13,14 +15,23 @@ export interface UpstreamServer {
 export const activeUpstreams: UpstreamServer[] = [];
 export const serverStatuses: Record<string, 'connected' | 'failed'> = {};
 
-export async function connectSingleUpstream(serverConfig: any): Promise<void> {
+export async function connectSingleUpstream(rawServerConfig: any): Promise<void> {
+  // Validate before spawning. This function turns config into a child process, so it
+  // is the last place to reject a malformed (or attacker-supplied) server entry.
+  const serverConfig = UpstreamServerSchema.parse(rawServerConfig);
+
   console.error(`Connecting to upstream server: ${serverConfig.name}...`);
-  
+
   try {
+    // Spawn from the gateway's own package root unless the entry says otherwise.
+    // Without this, an upstream configured with a relative script path ("tsx
+    // src/terminal-server.ts") only starts when the gateway happens to have been
+    // launched from the repo — so those servers vanish under Claude Desktop or Cursor.
     const transport = new StdioClientTransport({
       command: serverConfig.command,
       args: serverConfig.args,
-      env: { ...process.env, ...(serverConfig.env || {}) } as Record<string, string>,
+      cwd: serverConfig.cwd ?? PACKAGE_ROOT,
+      env: { ...process.env, ...(resolveServerEnv(serverConfig.env) || {}) } as Record<string, string>,
     });
 
     const client = new Client(

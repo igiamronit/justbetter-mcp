@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { readFileSync, writeFileSync } from "fs";
+import { getGlobalSecret } from "./secrets.js";
 
 export const CORE_PINNED_TOOLS = [
   'read_text_file',
@@ -21,12 +22,23 @@ export function getProviderBase(provider: string): string {
 }
 
 export const LlmProxySchema = z.object({
+  enabled: z.boolean().default(true),
   port: z.number().default(4141),
+  // Loopback by default. Binding 0.0.0.0 turns this into an open relay for the
+  // provider API key it forwards, reachable by anything on the local network.
+  host: z.string().default("127.0.0.1"),
+  authToken: z.string().optional(),
   realApiBase: z.string().optional(),
   realApiKey: z.string().optional(),
   geminiApiKey: z.string().optional(),
   mistralApiKey: z.string().optional(),
   model: z.string().optional(),
+});
+
+export const DashboardSchema = z.object({
+  enabled: z.boolean().default(true),
+  port: z.number().default(4040),
+  host: z.string().default("127.0.0.1"),
 });
 
 export const ConfigSchema = z.object({
@@ -39,9 +51,14 @@ export const ConfigSchema = z.object({
       command: z.string(),
       args: z.array(z.string()).default([]),
       env: z.record(z.string(), z.string()).optional(),
+      // Working directory for the spawned server. Defaults to the gateway's package
+      // root so relative args (e.g. "src/terminal-server.ts") resolve against the
+      // installation rather than whatever directory the MCP client launched us from.
+      cwd: z.string().optional(),
     })
   ),
   llmProxy: LlmProxySchema.optional(),
+  dashboard: DashboardSchema.optional(),
   pinnedTools: z.array(z.string()).default([]),
   destructiveTools: z.array(z.string()).default([]),
   preconditions: z.record(z.string(), z.object({
@@ -52,32 +69,73 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+/** Schema for a single upstream server, reused to validate dashboard input. */
+export const UpstreamServerSchema = ConfigSchema.shape.upstreamServers.element;
+
 export function getEffectiveApiBase(config: Config): string {
   const provider = config.apiProvider ?? "gemini";
   return config.llmProxy?.realApiBase ?? getProviderBase(provider);
 }
 
+/**
+ * Resolves the provider key. Config first (existing behaviour), then the process
+ * environment, then the 0600 secrets file in ~/.justbetter-mcp — so credentials can
+ * live outside the project directory, where the filesystem MCP server cannot read
+ * them back out and hand them to the model.
+ */
 export function getEffectiveApiKey(config: Config): string {
   const provider = config.apiProvider || "gemini";
   const llmConfig = config.llmProxy;
-  if (!llmConfig) return "";
-  if (provider === "gemini") {
-    return llmConfig.geminiApiKey || llmConfig.realApiKey || "";
+
+  const fromConfig = provider === "gemini"
+    ? (llmConfig?.geminiApiKey || llmConfig?.realApiKey)
+    : (llmConfig?.mistralApiKey || llmConfig?.realApiKey);
+  if (fromConfig) return fromConfig;
+
+  const envKey = provider === "gemini"
+    ? (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
+    : process.env.MISTRAL_API_KEY;
+  if (envKey) return envKey;
+
+  return getGlobalSecret(provider === "gemini" ? "geminiApiKey" : "mistralApiKey")
+    || getGlobalSecret("realApiKey")
+    || "";
+}
+
+/**
+ * Expands ${NAME} references in upstream env values against process.env and the
+ * global secrets file, so an upstream server can be configured with a placeholder
+ * instead of a literal token committed to config.json.
+ */
+export function resolveServerEnv(env?: Record<string, string>): Record<string, string> | undefined {
+  if (!env) return undefined;
+  const resolved: Record<string, string> = {};
+  for (const [key, rawValue] of Object.entries(env)) {
+    resolved[key] = rawValue.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name) => {
+      return process.env[name] ?? getGlobalSecret(name) ?? match;
+    });
   }
-  return llmConfig.mistralApiKey || llmConfig.realApiKey || "";
+  return resolved;
 }
 
 export function loadConfig(path: string): Config {
   const fileContent = readFileSync(path, "utf-8");
   const json = JSON.parse(fileContent);
   const config = ConfigSchema.parse(json);
-  
+
   config.pinnedTools = Array.from(new Set([...CORE_PINNED_TOOLS, ...config.pinnedTools]));
-  
+
   if (config.llmProxy && process.env.LLM_PORT) {
     config.llmProxy.port = parseInt(process.env.LLM_PORT, 10);
   }
-  
+
+  if (process.env.DASHBOARD_PORT) {
+    config.dashboard = {
+      ...(config.dashboard ?? DashboardSchema.parse({})),
+      port: parseInt(process.env.DASHBOARD_PORT, 10)
+    };
+  }
+
   return config;
 }
 

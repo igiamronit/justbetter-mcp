@@ -1,18 +1,25 @@
 {
   "name": "justbetter-mcp",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "src/proxy.ts",
   "type": "module",
   "bin": {
     "justbetter-cli": "./bin/cli.js"
   },
   "scripts": {
+    "dev": "tsx src/cli.ts",
+    "start": "tsx src/proxy.ts",
+    "gateway": "tsx src/proxy.ts",
+    "cli": "tsx src/cli.ts",
+    "tui": "tsx src/tui.tsx",
+    "tokens": "node count-tokens.js",
+    "typecheck": "tsc --noEmit",
     "test": "tsx tests/run-all.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "An MCP gateway with dynamic, retrieval-based tool injection.",
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

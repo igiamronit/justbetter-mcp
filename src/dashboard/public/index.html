@@ -17,6 +17,13 @@
             </nav>
         </header>
 
+        <div id="auth-banner" class="auth-banner" hidden>
+            <strong>Not authenticated.</strong>
+            Open the dashboard using the tokenized URL printed in the gateway's startup
+            logs (<code>http://127.0.0.1:4040/?token=…</code>). The management API can
+            start processes, so it is not reachable without that token.
+        </div>
+
         <main>
             <!-- Servers Tab -->
             <section id="servers" class="tab-content active">

@@ -4,8 +4,14 @@ import TextInput from 'ink-text-input';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import fs from 'fs';
+import path from 'path';
+import {
+  smartTruncate, toolContentToText, pruneMessages, resolveProxyUrl,
+  resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
+} from './agent-common.js';
+import { PACKAGE_ROOT, packagePath } from './paths.js';
 
-const configPath = process.argv[2] || 'config.json';
+const configPath = path.resolve(process.argv[2] || 'config.json');
 let cliConfig: any = {};
 try {
   cliConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -13,38 +19,12 @@ try {
   // The proxy will surface config errors if they matter at runtime.
 }
 
+const PROXY_URL = resolveProxyUrl(cliConfig);
+
 const INITIAL_LLM_MESSAGES = [{ role: 'system', content: 'JUSTBETTER_CLI_AGENT' }];
 const MAX_TURNS = 20;
-const MAX_TOOL_CHARS = 15000;
 const ASSISTANT_PREVIEW_LINES = 8;
 const TOOL_CONTENT_PREVIEW_LINES = 6;
-
-function smartTruncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  
-  const halfLimit = Math.floor(maxLength / 2);
-  
-  // Find the last newline before halfLimit for the head
-  let headEnd = text.lastIndexOf('\n', halfLimit);
-  if (headEnd === -1) headEnd = halfLimit; // fallback if no newlines
-  
-  // Find the first newline after (text.length - halfLimit) for the tail
-  const tailStartTarget = text.length - halfLimit;
-  let tailStart = text.indexOf('\n', tailStartTarget);
-  if (tailStart === -1) tailStart = tailStartTarget; // fallback
-  
-  // If we couldn't find good boundaries or they overlap weirdly, just hard cut
-  if (headEnd >= tailStart) {
-    headEnd = halfLimit;
-    tailStart = text.length - halfLimit;
-  }
-  
-  const head = text.substring(0, headEnd);
-  const tail = text.substring(tailStart);
-  const omitted = text.length - (head.length + tail.length);
-  
-  return `${head}\n\n...[SYSTEM WARNING: OUTPUT TRUNCATED. OMITTED ${omitted} CHARACTERS TO PREVENT CONTEXT EXHAUSTION]...\n\n${tail}`;
-}
 const TOOL_ARGS_PREVIEW_LINES = 3;
 
 type UiEventType = 'user' | 'assistant' | 'tool_request' | 'tool_running' | 'tool_result' | 'system';
@@ -70,17 +50,6 @@ type TranscriptLine = {
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function toolContentToText(content: any): string {
-  if (!Array.isArray(content)) {
-    return typeof content === 'string' ? content : JSON.stringify(content ?? '');
-  }
-
-  return content.map((part) => {
-    if (typeof part?.text === 'string') return part.text;
-    return JSON.stringify(part);
-  }).join('\n');
 }
 
 function formatToolArgs(rawArgs: any) {
@@ -335,16 +304,20 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
       turns++;
 
       try {
-        // Prune history to prevent context bloat on long sessions
-        // Keep the initial system prompt (index 0) and the last 40 messages
-        let prunedHistory = history;
-        if (history.length > 40) {
-          prunedHistory = [history[0], ...history.slice(-40)];
+        // Prune history to prevent context bloat on long sessions. Slicing the last N
+        // messages could orphan a `role: "tool"` reply from the assistant turn that
+        // requested it, which the chat-completions API rejects; pruneMessages drops
+        // whole assistant+tool groups instead.
+        const prunedHistory = pruneMessages(history, MAX_CONTEXT_CHARS);
+
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (cliConfig.llmProxy?.authToken) {
+          headers['X-JustBetter-Token'] = cliConfig.llmProxy.authToken;
         }
 
-        const response = await fetch('http://localhost:4141/v1/chat/completions', {
+        const response = await fetch(PROXY_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             model: cliConfig.llmProxy?.model || 'mistral-large-latest',
             messages: prunedHistory
@@ -642,13 +615,18 @@ async function start() {
   try {
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: ['node_modules/tsx/dist/cli.mjs', 'src/proxy.ts', configPath],
+      args: [
+        packagePath('node_modules', 'tsx', 'dist', 'cli.mjs'),
+        packagePath('src', 'proxy.ts'),
+        configPath
+      ],
+      cwd: PACKAGE_ROOT,
       env: { ...(process.env as Record<string, string>), SILENCE_LOGS: '1' }
     });
 
     mcpClient = new Client({ name: 'justbetter-tui', version: '1.0.0' }, { capabilities: {} });
     await mcpClient.connect(transport);
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await waitForProxy(resolveProxyBase(cliConfig));
     rerender(<App mcpClient={mcpClient} />);
   } catch (e: any) {
     // Keep the TUI alive; the status bar will remain in connecting state.

@@ -7,13 +7,35 @@
       "name": "filesystem",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    {
+      "name": "github",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
     }
   ],
   "llmProxy": {
+    "enabled": true,
     "port": 4141,
+    "host": "127.0.0.1",
     "geminiApiKey": "YOUR-GEMINI-API-KEY",
     "mistralApiKey": "YOUR-MISTRAL-API-KEY",
     "model": "mistral-large-latest"
   },
-  "pinnedTools": []
+  "dashboard": {
+    "enabled": true,
+    "port": 4040,
+    "host": "127.0.0.1"
+  },
+  "pinnedTools": [],
+  "destructiveTools": [
+    "run_terminal_command",
+    "write_file",
+    "edit_file",
+    "delete_file",
+    "drop_table"
+  ]
 }

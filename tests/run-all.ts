@@ -26,8 +26,10 @@ const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'justbetter-mcp-tests-'));
 const originalCwd = process.cwd();
 const originalEnv = { ...process.env };
 
-// Keep stateful modules that use relative paths, especially catalog.db, isolated
-// from the user's real repository database.
+// Keep stateful modules isolated from the user's real repository database.
+// JUSTBETTER_HOME is what src/paths.ts honours, and it must be set before any src
+// module is imported because catalog.ts opens its database at module load.
+process.env.JUSTBETTER_HOME = tempRoot;
 process.chdir(tempRoot);
 
 function srcModule(relativePath: string) {
@@ -188,7 +190,8 @@ const tests: TestCase[] = [
       const { default: Database } = await import('better-sqlite3');
       const sqliteVec = await import('sqlite-vec');
 
-      const db = new Database('catalog.db');
+      const { CATALOG_DB_PATH } = await import(srcModule('src/paths.ts'));
+      const db = new Database(CATALOG_DB_PATH());
       sqliteVec.load(db);
 
       const vector = new Float32Array(384);
@@ -227,15 +230,23 @@ const tests: TestCase[] = [
       db.prepare('INSERT INTO vec_tools (id, embedding) VALUES (?, ?)').run('github:delete_repo_test', Buffer.from(vector.buffer));
       db.close();
 
-      const results = catalog.searchTools(vector, ['fs', 'github'], 0.9, 10);
+      // Signature: (queryVector, connectedServers, excludedTools, threshold, topK)
+      const results = catalog.searchTools(vector, ['fs', 'github'], [], 0.9, 10);
       assert.equal(results.length, 1);
       assert.equal(results[0]?.tool_name, 'read_text_file_test');
 
-      const noServerMatch = catalog.searchTools(vector, ['db'], 0.1, 10);
+      const noServerMatch = catalog.searchTools(vector, ['db'], [], 0.1, 10);
       assert.equal(noServerMatch.length, 0);
 
-      const noThresholdMatch = catalog.searchTools(unrelated, ['fs'], 0.9, 10);
+      const noThresholdMatch = catalog.searchTools(unrelated, ['fs'], [], 0.9, 10);
       assert.equal(noThresholdMatch.length, 0);
+
+      const excluded = catalog.searchTools(vector, ['fs', 'github'], ['read_text_file_test'], 0.9, 10);
+      assert.equal(excluded.length, 0);
+
+      // A threshold passed where the exclusion list belongs used to be spread into the
+      // SQL parameters and blow up deep inside better-sqlite3.
+      assert.throws(() => catalog.searchTools(vector, ['fs'], 0.9 as any, 10), /excludedTools must be an array/);
     }
   },
   {
@@ -253,7 +264,8 @@ const tests: TestCase[] = [
         tools: [{ name: 'schema_gate_read', description: 'Read file', inputSchema: { type: 'object' } } as any]
       });
 
-      const db = new Database('catalog.db');
+      const { CATALOG_DB_PATH } = await import(srcModule('src/paths.ts'));
+      const db = new Database(CATALOG_DB_PATH());
       db.prepare(`
         INSERT OR REPLACE INTO tools (id, server_name, tool_name, description, full_schema_json, fingerprint, is_quarantined)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -275,20 +287,121 @@ const tests: TestCase[] = [
       );
       db.close();
 
-      const blocked = validateToolCall('schema_gate_read', { path: 'package.json' });
+      const config = { pinnedTools: [], destructiveTools: [] };
+
+      const blocked = validateToolCall('schema_gate_read', { path: 'package.json' }, config);
       assert.equal(blocked.allowed, false);
       assert.match(blocked.error || '', /not currently available/);
 
+      // A missing config must not throw; the gate still has to reach a verdict.
+      assert.equal(validateToolCall('schema_gate_read', { path: 'package.json' }).allowed, false);
+
       markToolInjected('schema_gate_read');
-      const invalid = validateToolCall('schema_gate_read', { path: 123 });
+      const invalid = validateToolCall('schema_gate_read', { path: 123 }, config);
       assert.equal(invalid.allowed, false);
       assert.match(invalid.error || '', /Invalid arguments/);
 
-      const valid = validateToolCall('schema_gate_read', { path: 'package.json' });
+      const valid = validateToolCall('schema_gate_read', { path: 'package.json' }, config);
       assert.equal(valid.allowed, true);
+      // The gate reports which server it validated against, so routing cannot drift.
+      assert.equal(valid.tool?.server_name, 'fs');
 
-      assert.equal(validateToolCall('request_tools', {}).allowed, true);
-      assert.equal(validateToolCall('batch_call', { calls: [] }).allowed, true);
+      assert.equal(validateToolCall('request_tools', {}, config).allowed, true);
+      assert.equal(validateToolCall('batch_call', { calls: [] }, config).allowed, true);
+    }
+  },
+  {
+    name: 'hallucination gate: pinned tools stay callable without a per-turn injection',
+    async fn() {
+      const { default: Database } = await import('better-sqlite3');
+      const { activeUpstreams } = await import(srcModule('src/upstream.ts'));
+      const { validateToolCall } = await import(srcModule('src/gates/hallucination.ts'));
+      const { CATALOG_DB_PATH } = await import(srcModule('src/paths.ts'));
+
+      activeUpstreams.length = 0;
+      activeUpstreams.push({
+        name: 'fs',
+        client: {} as any,
+        tools: [{ name: 'pinned_gate_read', description: 'Read file', inputSchema: { type: 'object' } } as any]
+      });
+
+      const db = new Database(CATALOG_DB_PATH());
+      db.prepare(`
+        INSERT OR REPLACE INTO tools (id, server_name, tool_name, description, full_schema_json, fingerprint, approved_fingerprint, is_quarantined)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'fs:pinned_gate_read', 'fs', 'pinned_gate_read', 'Read file',
+        JSON.stringify({ name: 'pinned_gate_read', inputSchema: { type: 'object', properties: {} } }),
+        'fp-pinned', 'fp-pinned', 0
+      );
+      db.close();
+
+      // Mode 2 never lists pinned tools and never marks them injected. Gating them on a
+      // per-turn injection record made the core filesystem/terminal tools permanently
+      // uncallable from Claude Desktop and Cursor.
+      const unpinned = validateToolCall('pinned_gate_read', {}, { pinnedTools: [] });
+      assert.equal(unpinned.allowed, false);
+
+      const pinned = validateToolCall('pinned_gate_read', {}, { pinnedTools: ['pinned_gate_read'] });
+      assert.equal(pinned.allowed, true);
+    }
+  },
+  {
+    name: 'catalog: quarantine survives a re-index and only a real approval clears it',
+    async fn() {
+      const catalog = await import(srcModule('src/catalog.ts'));
+
+      const v1 = [{ name: 'drift_tool', description: 'Original', inputSchema: { type: 'object', properties: {} } }];
+      const v2 = [{ name: 'drift_tool', description: 'Changed upstream', inputSchema: { type: 'object', properties: { danger: { type: 'string' } } } }];
+
+      await catalog.indexTools('drift', v1);
+      assert.equal(catalog.getToolByName('drift_tool', ['drift'])?.tool_name, 'drift_tool');
+
+      // Upstream changes the schema: the tool is quarantined and disappears from search.
+      await catalog.indexTools('drift', v2);
+      assert.equal(catalog.getToolByName('drift_tool', ['drift']), undefined);
+
+      // Re-indexing again (a gateway restart) must NOT silently clear the quarantine.
+      await catalog.indexTools('drift', v2);
+      assert.equal(catalog.getToolByName('drift_tool', ['drift']), undefined);
+
+      // Approval recomputes the fingerprint server-side and restores the tool.
+      const approval = catalog.clearQuarantine('drift_tool', 'drift');
+      assert.equal(approval.approved, true);
+      assert.equal(typeof approval.fingerprint, 'string');
+      assert.equal(catalog.getToolByName('drift_tool', ['drift'])?.tool_name, 'drift_tool');
+
+      // And it stays cleared once the approved schema is what upstream advertises.
+      await catalog.indexTools('drift', v2);
+      assert.equal(catalog.getToolByName('drift_tool', ['drift'])?.tool_name, 'drift_tool');
+    }
+  },
+  {
+    name: 'agent-common: pruneMessages keeps assistant tool_calls with their results',
+    async fn() {
+      const { pruneMessages } = await import(srcModule('src/agent-common.ts'));
+
+      const messages = [
+        { role: 'system', content: 'SYSTEM' },
+        { role: 'user', content: 'x'.repeat(400) },
+        { role: 'assistant', tool_calls: [{ id: 'call_1', function: { name: 'read', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'call_1', content: 'y'.repeat(400) },
+        { role: 'user', content: 'latest question' }
+      ];
+
+      const pruned = pruneMessages(messages, 200);
+
+      assert.equal(pruned[0]?.role, 'system');
+      assert.equal(pruned.at(-1)?.content, 'latest question');
+
+      // No tool result may survive without the assistant turn that requested it.
+      const toolIds = pruned.filter((m: any) => m.role === 'tool').map((m: any) => m.tool_call_id);
+      const callIds = pruned
+        .filter((m: any) => Array.isArray(m.tool_calls))
+        .flatMap((m: any) => m.tool_calls.map((c: any) => c.id));
+      for (const id of toolIds) {
+        assert.ok(callIds.includes(id), `orphaned tool result ${id}`);
+      }
     }
   },
   {

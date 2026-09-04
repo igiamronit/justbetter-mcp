@@ -1,13 +1,78 @@
 import express from 'express';
 import fs from 'fs';
 import { embed } from './embeddings.js';
-import { searchTools, getToolByName, getAllToolSummaries, markToolInjected, getRecentlyInjectedTools, getActiveTools } from './catalog.js';
+import {
+  searchTools, getToolByName, getAllToolSummaries, markToolInjected,
+  getRecentlyInjectedTools, getActiveTools, getActiveSchemaBytes
+} from './catalog.js';
 import type { Config } from './config.js';
 import { getEffectiveApiBase, getEffectiveApiKey } from './config.js';
 import { serverStatuses, activeUpstreams } from './upstream.js';
 import { broadcastEvent } from './dashboard/server.js';
 import { passesPreconditions } from './gates/precondition.js';
 import { fetchWithRetry } from './fetch-retry.js';
+import { TOKEN_LOG_PATH } from './paths.js';
+
+/**
+ * OpenAI-compatible clients may send `content` as a plain string or as an array of
+ * typed content parts (any multimodal or cache-annotated request). Assuming a string
+ * and calling .split() on it turned every such request into a 500.
+ */
+function extractText(content: any): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map(part => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (content == null) return '';
+  return String(content);
+}
+
+/** Rough char-per-token estimate, only ever used for the dashboard's savings figure. */
+const CHARS_PER_TOKEN = 4;
+
+/** Appends one row to the token log. Resolved absolutely so it cannot follow the cwd. */
+function logTokenUsage(usage: any, injectedCount: number) {
+  if (!usage) return;
+  try {
+    const logFile = TOKEN_LOG_PATH();
+    const logLine = `${new Date().toISOString()},${usage.prompt_tokens || 0},${usage.completion_tokens || 0},${usage.total_tokens || 0},${injectedCount}\n`;
+    if (!fs.existsSync(logFile)) {
+      fs.writeFileSync(logFile, 'timestamp,prompt_tokens,completion_tokens,total_tokens,tools_injected\n');
+    }
+    fs.appendFileSync(logFile, logLine);
+  } catch (e: any) {
+    console.error('[LLM Proxy] Failed to write token log:', e.message);
+  }
+}
+
+/**
+ * Best-effort usage extraction from an SSE stream tail. Providers only emit a usage
+ * block when the caller asked for one, so a miss here is normal and simply means the
+ * turn goes unlogged rather than being logged wrongly.
+ */
+function parseStreamUsage(tail: string): any | undefined {
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const parsed = JSON.parse(payload);
+      if (parsed?.usage) return parsed.usage;
+    } catch {
+      /* partial or non-JSON chunk */
+    }
+  }
+  return undefined;
+}
 
 // The request_tools fallback schema — always injected alongside matched tools
 const REQUEST_TOOLS_SCHEMA = {
@@ -76,6 +141,22 @@ export function startLlmProxy(config: Config) {
     res.json({ status: 'ok', service: 'justbetter-mcp-llm-proxy' });
   });
 
+  // Optional shared secret. This proxy forwards every request with the real provider
+  // key attached, so when a token is configured it must be presented; without one the
+  // loopback bind is the only thing standing between a local process and free use of
+  // that key.
+  if (llmConfig.authToken) {
+    app.use('/v1', (req, res, next) => {
+      const header = req.get('authorization') || '';
+      const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+      const provided = bearer || req.get('x-justbetter-token') || '';
+      if (provided !== llmConfig.authToken) {
+        return res.status(401).json({ error: { message: 'Unauthorized: invalid JustBetter proxy token.', type: 'proxy_auth' } });
+      }
+      next();
+    });
+  }
+
   // Intercept chat completion requests
   app.post('/v1/chat/completions', async (req, res) => {
     try {
@@ -84,7 +165,7 @@ export function startLlmProxy(config: Config) {
 
       // Step 1: Extract the latest user message
       const lastUserMessage = messages.filter((m: any) => m.role === 'user').at(-1);
-      const userPrompt = lastUserMessage?.content || '';
+      const userPrompt = extractText(lastUserMessage?.content);
 
       console.error(`\n[LLM Proxy] Intercepted prompt: "${userPrompt.slice(0, 80)}${userPrompt.length > 80 ? '...' : ''}"`);
 
@@ -132,14 +213,6 @@ export function startLlmProxy(config: Config) {
         console.error(`[LLM Proxy] Semantic prompt injection is disabled. Prompt embedding skipped.`);
       }
 
-      broadcastEvent({
-        type: 'discovery_trace',
-        prompt: userPrompt,
-        matchedTools: matchedTools.map(t => ({ name: t.tool_name, score: t.score })),
-        tokensSaved: Math.max(0, 15000 - (matchedTools.length * 400)),
-        isFallback: false
-      });
-
       // Step 4: Build the tools array to inject using a single-pass Deduplication Map
       const finalTools = new Map();
 
@@ -158,8 +231,12 @@ export function startLlmProxy(config: Config) {
         }
       }
 
-      // 3. Recently requested tools (to prevent hallucination failures on subsequent turns)
-      const recentlyInjected = getRecentlyInjectedTools();
+      // 3. Recently requested tools (to prevent hallucination failures on subsequent turns).
+      //    Bounded and ordered most-recent-first: an unbounded rolling window makes the
+      //    injected set grow monotonically until it approaches the whole catalog, which
+      //    quietly turns Mode 1 back into the Mode 3 inject-all baseline mid-session.
+      //    Pinned tools are excluded because step 1 already re-added every one of them.
+      const recentlyInjected = getRecentlyInjectedTools(config.pinnedTools);
       for (const t of recentlyInjected) {
         // Ensure they belong to connected servers
         if (connectedServerNames.includes(t.server_name) && passesPreconditions(t.tool_name, t.server_name, config)) {
@@ -189,6 +266,23 @@ export function startLlmProxy(config: Config) {
         injectedToolNames.add(name);
         markToolInjected(name);
       }
+
+      // Measure the actual saving instead of guessing at it: the Mode 3 baseline is the
+      // serialized size of every active schema, and what we send is the serialized size
+      // of the schemas we selected. Both are real bytes, converted at a stated ratio.
+      const injectedBytes = JSON.stringify(toolSchemas).length;
+      const injectAllBytes = getActiveSchemaBytes(connectedServerNames);
+      const tokensSaved = Math.max(0, Math.round((injectAllBytes - injectedBytes) / CHARS_PER_TOKEN));
+
+      broadcastEvent({
+        type: 'discovery_trace',
+        prompt: userPrompt,
+        matchedTools: matchedTools.map(t => ({ name: t.tool_name, score: t.score })),
+        injectedTools: Array.from(injectedToolNames),
+        tokensSaved,
+        isEstimate: true,
+        isFallback: false
+      });
 
       // Step 5: Inject tools into the request body
       body.tools = toolSchemas;
@@ -270,16 +364,22 @@ Reference files by absolute path. No filler text before tool calls.`;
       res.status(realResponse.status);
 
       if (body.stream) {
-        // For streaming responses, pipe the body through
+        // For streaming responses, pipe the body through while watching the tail for a
+        // usage block, so streamed turns are represented in the token log too.
         if (realResponse.body) {
           const reader = realResponse.body.getReader();
+          const decoder = new TextDecoder();
+          let tail = '';
+
           const pump = async () => {
             while (true) {
               const { done, value } = await reader.read();
               if (done) {
+                logTokenUsage(parseStreamUsage(tail), toolSchemas.length);
                 res.end();
                 break;
               }
+              tail = (tail + decoder.decode(value, { stream: true })).slice(-16384);
               res.write(value);
             }
           };
@@ -296,14 +396,7 @@ Reference files by absolute path. No filler text before tool calls.`;
         const responseData = await realResponse.text();
         try {
           const parsed = JSON.parse(responseData);
-          if (parsed.usage) {
-            const injectedCount = toolSchemas.length;
-            const logLine = `${new Date().toISOString()},${parsed.usage.prompt_tokens || 0},${parsed.usage.completion_tokens || 0},${parsed.usage.total_tokens || 0},${injectedCount}\n`;
-            if (!fs.existsSync('token_log.csv')) {
-              fs.writeFileSync('token_log.csv', 'timestamp,prompt_tokens,completion_tokens,total_tokens,tools_injected\n');
-            }
-            fs.appendFileSync('token_log.csv', logLine);
-          }
+          logTokenUsage(parsed.usage, toolSchemas.length);
         } catch (e) {
           console.error('[LLM Proxy] Failed to parse token usage:', e);
         }
@@ -319,9 +412,11 @@ Reference files by absolute path. No filler text before tool calls.`;
   });
 
   // Proxy all other OpenAI-compatible endpoints directly (models, embeddings, etc.)
-  app.use('/v1', async (req, res) => {
-    // Skip chat/completions since we handle that with a dedicated route above
-    if (req.path === '/chat/completions') return;
+  app.use('/v1', async (req, res, next) => {
+    // Skip chat/completions since the dedicated POST route above handles it. Handing off
+    // to next() matters: returning here left non-POST requests to that path with no
+    // response at all, so the socket hung open until the client gave up.
+    if (req.path === '/chat/completions') return next();
 
     try {
       const effectiveBase = getEffectiveApiBase(config);
@@ -342,14 +437,23 @@ Reference files by absolute path. No filler text before tool calls.`;
     }
   });
 
-  const server = app.listen(llmConfig.port, () => {
-    console.error(`[LLM Proxy] Listening on http://localhost:${llmConfig.port}/v1`);
+  const host = llmConfig.host || '127.0.0.1';
+
+  const server = app.listen(llmConfig.port, host, () => {
+    console.error(`[LLM Proxy] Listening on http://${host}:${llmConfig.port}/v1`);
     console.error(`[LLM Proxy] Provider: ${config.apiProvider || 'gemini'} → ${getEffectiveApiBase(config)}`);
+    if (!llmConfig.authToken) {
+      console.error(`[LLM Proxy] No authToken set: any process on this machine can spend the configured API key.`);
+    }
+    if (host !== '127.0.0.1' && host !== 'localhost') {
+      console.error(`[LLM Proxy] ⚠️  Bound to ${host}, not loopback. This exposes your provider API key to the network.`);
+    }
   });
 
   server.on('error', (err: any) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`[LLM Proxy] Port ${llmConfig.port} is already in use. Assuming LLM Proxy is already running in another instance.`);
+      console.error(`[LLM Proxy] ⚠️  Port ${llmConfig.port} is already in use, so THIS instance has no LLM proxy.`);
+      console.error(`[LLM Proxy]    Requests to that port are served by the other process. Set llmProxy.port, or llmProxy.enabled=false, to silence this.`);
     } else {
       console.error(`[LLM Proxy] Error: ${err.message}`);
     }

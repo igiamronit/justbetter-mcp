@@ -248,32 +248,83 @@ Create a `config.json` in the project root. Here is an example format detailing 
         "@modelcontextprotocol/server-github"
       ],
       "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "YOUR_GITHUB_PAT"
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
       }
     }
   ],
   "llmProxy": {
+    "enabled": true,
     "port": 4141,
+    "host": "127.0.0.1",
     "geminiApiKey": "YOUR_GEMINI_API_KEY",
     "mistralApiKey": "YOUR_MISTRAL_API_KEY",
     "model": "mistral-large-2512"
   },
+  "dashboard": {
+    "enabled": true,
+    "port": 4040,
+    "host": "127.0.0.1"
+  },
   "pinnedTools": [],
   "destructiveTools": [
+    "run_terminal_command",
     "delete_file",
     "drop_table"
   ]
 }
 ```
 
+**Notes on configuration**
+
+- **Paths.** Upstream servers are spawned with the gateway's install directory as their working directory, so relative args like `src/terminal-server.ts` resolve no matter which client launched the gateway. Add a `"cwd"` to an upstream entry to override this. The gateway's own state (`catalog.db`, `token_log.csv`) always lives in the install directory, or in `JUSTBETTER_HOME` if that is set.
+- **Secrets.** Any `${NAME}` in an upstream `env` value is expanded from the process environment, falling back to `~/.justbetter-mcp/secrets.json` (created `0600`). Provider keys resolve in the order `config.json` → environment (`GEMINI_API_KEY` / `MISTRAL_API_KEY`) → that secrets file, so credentials need not sit in the project directory where the filesystem server can read them back.
+- **`destructiveTools`.** Names listed here require an OS dialog confirmation before every execution. They must match the tool names the upstream server actually exposes (the filesystem server's reader is `read_text_file`, not `read_file`).
+- **Ports.** Both servers bind loopback. `llmProxy.authToken`, when set, is additionally required as a bearer token on `/v1`. The dashboard always requires the session token printed at startup.
+
 ### Running the Gateway & TUI
 1. **Install dependencies:**
    ```bash
    npm install
    ```
-2. **Start the gateway and dashboard:**
+2. **Start it.** Pick the entry point that matches your mode:
    ```bash
-   npm run dev
+   npm run dev        # Mode 1: JustBetter CLI + gateway + LLM proxy + dashboard
+   npm run tui        # Mode 1, Ink-based terminal UI
+   npm start          # gateway only (what an MCP client should spawn)
    ```
-   *(Or standard node execution depending on package.json scripts, e.g., `npx tsx src/cli.ts`)*
-3. **Configure your AI Client:** Set your client (e.g. Cursor, Claude Desktop, or custom CLI) to use `http://localhost:4141/v1` as the OpenAI-compatible API base.
+3. **Open the dashboard.** The management API can start processes, so it is token-gated. The startup log prints the URL to use:
+   ```
+   [Dashboard] Local management UI: http://127.0.0.1:4040/?token=<generated at boot>
+   ```
+
+### Connecting a client
+
+**Mode 1 — JustBetter CLI.** Set `"semanticPromptInjection": true` and run `npm run dev`. The CLI talks to the LLM proxy, which injects schemas before the request reaches the provider.
+
+**Mode 2 — Claude Desktop, Cursor, or any MCP client.** Set `"semanticPromptInjection": false` and register the gateway as an stdio MCP server. These clients spawn the gateway themselves, so there is no base URL to configure:
+
+```json
+{
+  "mcpServers": {
+    "justbetter": {
+      "command": "node",
+      "args": [
+        "<path to repo>/node_modules/tsx/dist/cli.mjs",
+        "<path to repo>/src/proxy.ts",
+        "<path to repo>/config.json"
+      ]
+    }
+  }
+}
+```
+
+The client will see exactly two tools, `request_tools` and `batch_call`; everything else is retrieved on demand. Set `"llmProxy": { "enabled": false }` if you only ever use Mode 2 and do not want the HTTP proxy running.
+
+**OpenAI-compatible clients.** Any client that accepts a custom base URL can point at `http://127.0.0.1:4141/v1` to get Mode 1 injection.
+
+### Verifying
+```bash
+npm test         # gate, catalog, config and terminal-server coverage
+npm run typecheck
+npm run tokens   # summarise token_log.csv
+```

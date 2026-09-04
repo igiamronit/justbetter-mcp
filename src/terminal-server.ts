@@ -6,6 +6,9 @@ import util from "util";
 
 const execAsync = util.promisify(exec);
 
+/** Commands are killed after this long so a hung process cannot wedge the server. */
+const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
+
 const server = new Server({ name: "terminal", version: "1.0.0" }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -37,8 +40,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
     }
     
     try {
-      const { stdout, stderr } = await execAsync(cmd, { 
-        maxBuffer: 1024 * 1024 * 10 // 10MB buffer to prevent crash on large outputs
+      const { stdout, stderr } = await execAsync(cmd, {
+        maxBuffer: 1024 * 1024 * 10, // 10MB buffer to prevent crash on large outputs
+        // A command that never returns would otherwise hold this server open forever.
+        timeout: COMMAND_TIMEOUT_MS
       });
       
       let output = "";
@@ -51,9 +56,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
         content: [{ type: "text", text: output }]
       };
     } catch (e: any) {
+      const reason = e?.killed
+        ? `Command timed out after ${COMMAND_TIMEOUT_MS / 1000}s and was terminated.`
+        : e?.message;
       return {
         isError: true,
-        content: [{ type: "text", text: `Execution failed: ${e.message}\nSTDOUT: ${e.stdout}\nSTDERR: ${e.stderr}` }]
+        content: [{ type: "text", text: `Execution failed: ${reason}\nSTDOUT: ${e.stdout ?? ''}\nSTDERR: ${e.stderr ?? ''}` }]
       };
     }
   }

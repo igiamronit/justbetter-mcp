@@ -244,3 +244,17 @@ button.danger {
 .status-dot.unknown {
     background-color: gray;
 }
+
+.auth-banner {
+    margin: 16px 0;
+    padding: 12px 16px;
+    border: 1px solid var(--danger-color);
+    border-radius: 6px;
+    background: rgba(220, 53, 69, 0.08);
+    line-height: 1.5;
+}
+
+.auth-banner code {
+    background: var(--hover-bg);
+    padding: 1px 4px;
+}

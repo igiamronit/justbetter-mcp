@@ -1,8 +1,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import path from "path";
 import { loadConfig } from "./config.js";
-import { indexTools, searchTools, markToolInjected } from "./catalog.js";
+import type { Config } from "./config.js";
+import { searchTools, markToolInjected } from "./catalog.js";
 import { embed } from "./embeddings.js";
 import { startLlmProxy } from "./llm-proxy.js";
 import { validateToolCall } from "./gates/hallucination.js";
@@ -60,7 +62,7 @@ const BATCH_CALL_MCP_SCHEMA = {
  * Executes a single tool call through the full security and dispatch pipeline.
  * This is used for both standard calls and sub-calls inside a batch_call.
  */
-async function executeSingleTool(toolName: string, args: any, config: any) {
+async function executeSingleTool(toolName: string, args: any, config: Config) {
   // --- Phase 5B Grouping Resolution Seam ---
   const { resolvedToolName, resolvedArgs } = resolveGroupedCall(toolName, args);
 
@@ -83,7 +85,14 @@ async function executeSingleTool(toolName: string, args: any, config: any) {
     }
   }
 
-  const upstream = activeUpstreams.find(u => u.tools.some(t => t.name === resolvedToolName));
+  // Route to the exact server the gate validated against. Searching activeUpstreams by
+  // tool name instead would let the first-registered server win whenever two upstreams
+  // expose the same name, so the schema checked and the server called could differ.
+  const targetServer = gateResult.tool?.server_name;
+  const upstream = targetServer
+    ? activeUpstreams.find(u => u.name === targetServer)
+    : activeUpstreams.find(u => u.tools.some(t => t.name === resolvedToolName));
+
   if (!upstream) {
     throw new Error(`Tool ${resolvedToolName} not found in any upstream server.`);
   }
@@ -100,17 +109,24 @@ async function executeSingleTool(toolName: string, args: any, config: any) {
 }
 
 async function main() {
-  const configPath = process.argv[2] || "config.json";
-  
-  // 1. Boot the Dashboard FIRST so it's always accessible
-  const dashboardServer = startDashboard(configPath);
-  
-  // 2. Load config and connect to upstreams (soft-failing on errors)
+  // Resolved against the launch directory once, so every later read/write of the config
+  // hits the same file even though the dashboard and upstreams run with their own cwd.
+  const configPath = path.resolve(process.argv[2] || "config.json");
+
+  // 1. Load config first, then boot the Dashboard before the slow upstream connect
+  //    so the management UI is reachable while servers are still coming up.
   const config = loadConfig(configPath);
+
+  const dashboardServer = config.dashboard?.enabled === false
+    ? undefined
+    : startDashboard(configPath, config);
+
+  // 2. Connect to upstreams (soft-failing on errors)
   await connectAllUpstreams(config);
 
-  // Phase 3: Start the LLM API Proxy (if configured)
-  const llmProxyServer = startLlmProxy(config);
+  // Phase 3: Start the LLM API Proxy (Mode 1). Mode 2 clients never touch it, so a
+  // config can switch it off rather than holding a port and an API key for nothing.
+  const llmProxyServer = config.llmProxy?.enabled === false ? undefined : startLlmProxy(config);
 
   const server = new Server(
     { name: "justbetter-mcp", version: "1.0.0" },
@@ -142,7 +158,13 @@ async function main() {
       // Embed the LLM's refined query and search without a threshold restriction, just taking top 4 matches
       const queryVector = await embed(query);
       const connectedServers = activeUpstreams.map(u => u.name);
-      const results = searchTools(queryVector, connectedServers, config.pinnedTools, -1.0, 4);
+
+      // Mode 1 re-injects pinned tools into every request, so excluding them here keeps
+      // the four discovery slots for capabilities the model does not already hold.
+      // Mode 2 has no such path: request_tools is the only route by which a pinned tool
+      // can ever be surfaced to Claude Desktop or Cursor, so it must not filter them out.
+      const excludedFromDiscovery = config.semanticPromptInjection ? config.pinnedTools : [];
+      const results = searchTools(queryVector, connectedServers, excludedFromDiscovery, -1.0, 4);
 
       if (results.length === 0) {
         return {
@@ -214,8 +236,12 @@ async function main() {
     return await executeSingleTool(toolName, request.params.arguments, config);
   });
 
-  // Handle graceful shutdown
+  // Handle graceful shutdown. Guarded because several signals fire for one exit
+  // (stdin 'close' and 'end' both arrive when an MCP client disconnects).
+  let shuttingDown = false;
   const cleanup = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.error("\n[Proxy] Shutting down gracefully...");
     try { await server.close(); } catch (e) {}
     if (dashboardServer) dashboardServer.close();

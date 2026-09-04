@@ -1,6 +1,12 @@
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const logFile = 'token_log.csv';
+// Same resolution the gateway uses, so the report reads the log the proxy actually
+// wrote rather than whatever happens to sit in the current directory.
+const packageRoot = path.dirname(fileURLToPath(import.meta.url));
+const dataDir = process.env.JUSTBETTER_HOME ? path.resolve(process.env.JUSTBETTER_HOME) : packageRoot;
+const logFile = path.join(dataDir, 'token_log.csv');
 
 if (!fs.existsSync(logFile)) {
   console.log(`Log file '${logFile}' does not exist yet. Run some commands first.`);
@@ -35,9 +41,15 @@ for (let i = 1; i < lines.length; i++) {
   totalTurns++;
 }
 
+if (totalTurns === 0) {
+  console.log(`No usable rows in '${logFile}' yet.`);
+  process.exit(0);
+}
+
 console.log("==========================================");
 console.log("📊 JustBetter MCP Token Usage Report");
 console.log("==========================================\n");
+console.log(`Log file: ${logFile}`);
 console.log(`Total Turns (Requests): ${totalTurns}`);
 console.log(`Avg Tools Injected per Turn: ${(totalInjected / totalTurns).toFixed(1)}`);
 console.log("------------------------------------------");

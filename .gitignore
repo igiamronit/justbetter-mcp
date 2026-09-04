@@ -32,3 +32,8 @@ Thumbs.db
 *.db-wal
 # Temporary test configs
 tests/test-config.json
+
+# Local working documents (not part of the project)
+report.tex
+FINDINGS.md
+RELEASE.md

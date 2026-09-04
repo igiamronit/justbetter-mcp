@@ -2,8 +2,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import readline from "readline";
 import fs from "fs";
+import path from "path";
+import {
+  smartTruncate, toolContentToText, pruneMessages, resolveProxyUrl,
+  resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
+} from "./agent-common.js";
+import { PACKAGE_ROOT, packagePath } from "./paths.js";
 
-const configPath = process.argv[2] || "config.json";
+const configPath = path.resolve(process.argv[2] || "config.json");
 let cliConfig: any = {};
 try {
   cliConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
@@ -11,34 +17,7 @@ try {
   // It will warn later or fail gracefully
 }
 
-function smartTruncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  
-  const halfLimit = Math.floor(maxLength / 2);
-  
-  // Find the last newline before halfLimit for the head
-  let headEnd = text.lastIndexOf('\n', halfLimit);
-  if (headEnd === -1) headEnd = halfLimit; // fallback if no newlines
-  
-  // Find the first newline after (text.length - halfLimit) for the tail
-  const tailStartTarget = text.length - halfLimit;
-  let tailStart = text.indexOf('\n', tailStartTarget);
-  if (tailStart === -1) tailStart = tailStartTarget; // fallback
-  
-  // If we couldn't find good boundaries or they overlap weirdly, just hard cut
-  if (headEnd >= tailStart) {
-    headEnd = halfLimit;
-    tailStart = text.length - halfLimit;
-  }
-  
-  const head = text.substring(0, headEnd);
-  const tail = text.substring(tailStart);
-  const omitted = text.length - (head.length + tail.length);
-  
-  return `${head}\n\n...[SYSTEM WARNING: OUTPUT TRUNCATED. OMITTED ${omitted} CHARACTERS TO PREVENT CONTEXT EXHAUSTION]...\n\n${tail}`;
-}
-
-const MAX_CONTEXT_CHARS = 200000;
+const PROXY_URL = resolveProxyUrl(cliConfig);
 
 let mcpClient: Client;
 let messages: any[] = [
@@ -54,8 +33,6 @@ const rl = readline.createInterface({
   prompt: "\nUser > "
 });
 
-// Memory pruning has been removed in favor of strict tool output truncation.
-
 async function runAgenticLoop() {
   let isFinished = false;
   let turns = 0;
@@ -70,9 +47,18 @@ async function runAgenticLoop() {
     turns++;
 
     try {
-      const response = await fetch("http://localhost:4141/v1/chat/completions", {
+      // Bound the transcript before each call; without this the history grows for the
+      // whole session and only ever stops at the provider's context limit.
+      messages = pruneMessages(messages, MAX_CONTEXT_CHARS);
+
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (cliConfig.llmProxy?.authToken) {
+        headers["X-JustBetter-Token"] = cliConfig.llmProxy.authToken;
+      }
+
+      const response = await fetch(PROXY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           model: cliConfig.llmProxy?.model || "mistral-large-latest",
           messages: messages,
@@ -122,15 +108,14 @@ async function runAgenticLoop() {
             if (result.isError) {
               resultText = "Error: ";
             }
-            resultText += (result.content as any[]).map(c => c.text).join('\n');
-            
+            resultText += toolContentToText(result.content);
+
             // Check for common filesystem errors that might not set isError flag
             if (resultText.toLowerCase().includes("enoent") || resultText.toLowerCase().includes("no such file")) {
               isFailure = true;
             }
 
             // PREVENT CONTEXT EXHAUSTION
-            const MAX_TOOL_CHARS = 15000;
             if (resultText.length > MAX_TOOL_CHARS) {
               resultText = smartTruncate(resultText, MAX_TOOL_CHARS);
             }
@@ -173,8 +158,6 @@ async function runAgenticLoop() {
               tool_call_id: toolCall.id,
               content: resultText
             });
-            
-            console.log(`[✅ Tool completed]`);
           } catch (e: any) {
             console.error(`[❌ Error running ${name}]: ${e.message}`);
             messages.push({
@@ -202,10 +185,17 @@ async function start() {
     console.warn(`[Warning] No llmProxy block found in ${configPath}. CLI requires this to function!`);
   }
   
-  // 1. Boot the gateway as a background process via MCP stdio
+  // 1. Boot the gateway as a background process via MCP stdio.
+  //    Paths are resolved from this module's location and the child is given the
+  //    package root as its cwd, so `justbetter-cli` works from any directory.
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: ["node_modules/tsx/dist/cli.mjs", "src/proxy.ts", configPath],
+    args: [
+      packagePath("node_modules", "tsx", "dist", "cli.mjs"),
+      packagePath("src", "proxy.ts"),
+      configPath
+    ],
+    cwd: PACKAGE_ROOT,
     env: process.env as Record<string, string> // Inherit env vars (secrets, etc)
   });
 
@@ -213,9 +203,14 @@ async function start() {
   
   console.log("⌛ Waiting for Gateway and LLM Proxy to boot...");
   await mcpClient.connect(transport);
-  
-  // Wait a few seconds for the HTTP server to finish binding
-  await new Promise(r => setTimeout(r, 4000));
+
+  // Poll the proxy's health endpoint rather than sleeping a fixed interval and hoping
+  // the HTTP server finished binding.
+  const ready = await waitForProxy(resolveProxyBase(cliConfig));
+  if (!ready) {
+    console.warn(`\n[Warning] LLM Proxy did not report healthy at ${resolveProxyBase(cliConfig)}/health.`);
+    console.warn(`[Warning] Check that llmProxy is enabled and its port is free.`);
+  }
   console.log("\n✅ Connected! Type 'exit' to quit.");
 
   rl.prompt();
