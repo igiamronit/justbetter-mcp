@@ -4,8 +4,8 @@
   "main": "src/proxy.ts",
   "type": "module",
   "bin": {
-    "justbetter-mcp": "./bin/cli.js",
-    "justbetter-cli": "./bin/cli.js"
+    "justbetter-mcp": "bin/cli.js",
+    "justbetter-cli": "bin/cli.js"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
