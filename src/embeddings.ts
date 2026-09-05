@@ -1,4 +1,13 @@
-import { pipeline } from '@huggingface/transformers';
+import { pipeline, env } from '@huggingface/transformers';
+import { dataPath } from './paths.js';
+
+/**
+ * The model weights are ~83MB and default to a cache inside
+ * node_modules/@huggingface/transformers/.cache -- which npm deletes on every
+ * reinstall, so upgrading the package re-downloaded the whole model. Keeping it
+ * beside the rest of our state means it is fetched once per machine.
+ */
+env.cacheDir = dataPath('models');
 
 let extractor: any = null;
 

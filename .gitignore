@@ -41,3 +41,6 @@ NEXT-SESSION.md
 
 # npm pack output
 *.tgz
+
+# Token usage log (lands here if JUSTBETTER_HOME points at the repo)
+token_log.csv

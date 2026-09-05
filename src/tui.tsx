@@ -5,12 +5,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import {
   smartTruncate, toolContentToText, pruneMessages, resolveProxyUrl,
   resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
 } from './agent-common.js';
-import { PACKAGE_ROOT, packagePath, resolveConfigPath } from './paths.js';
-import { isPlaceholderApiKey } from './config.js';
+import { packagePath, resolveConfigPath, invocationCwd } from './paths.js';
+import { isPlaceholderApiKey, verifyApiKey } from './config.js';
 
 const configPath = resolveConfigPath(process.argv[2]);
 let cliConfig: any = {};
@@ -51,6 +52,26 @@ function configNeedsSetup(): boolean {
   return !cliConfig.llmProxy || isPlaceholderApiKey(cliConfig);
 }
 
+/** Folders the agent may touch, as configured. Empty means "wherever you ran the CLI". */
+function currentWorkspace(): string[] {
+  const configured = Array.isArray(cliConfig.allowedDirectories) ? cliConfig.allowedDirectories : [];
+  return configured.length > 0 ? configured : [invocationCwd()];
+}
+
+/** Accepts one path or several separated by commas, and rejects any that do not exist. */
+function parseWorkspaceInput(value: string): { dirs: string[] } | { error: string } {
+  const parts = value.split(',').map(part => part.trim()).filter(Boolean);
+  if (parts.length === 0) return { error: 'Enter at least one folder.' };
+
+  const dirs: string[] = [];
+  for (const part of parts) {
+    const resolved = path.resolve(part);
+    if (!fs.existsSync(resolved)) return { error: `No such folder: ${resolved}` };
+    dirs.push(resolved);
+  }
+  return { dirs };
+}
+
 /** Writes cliConfig back to disk. Returns an error message, or null on success. */
 function persistConfig(): string | null {
   try {
@@ -79,11 +100,27 @@ type UiEvent = {
   summary?: string;
   content?: string;
   isError?: boolean;
+  /** Machinery rather than conversation: hidden unless /verbose is on. */
+  detail?: boolean;
 };
+
+/**
+ * What the transcript hides in quiet mode. Successful tool traffic is the model showing
+ * its working, which is noise most of the time -- but a failure is something the user has
+ * to see, so errors are never hidden.
+ */
+function isDetailEvent(event: UiEvent): boolean {
+  if (event.isError) return false;
+  if (event.detail) return true;
+  return event.type === 'tool_request' || event.type === 'tool_running' || event.type === 'tool_result';
+}
 
 const STARTUP_EVENTS: UiEvent[] = (() => {
   const seeded: UiEvent[] = [
-    { id: 'startup-config', type: 'system', text: `Config: ${configPath}` }
+    { id: 'startup-config', type: 'system', text: `Config: ${configPath}` },
+    // Without this line the only route to /setup is /config, which you have to already
+    // know to type -- so a rejected API key looked like a dead end.
+    { id: 'startup-help', type: 'system', text: 'Type / to see the commands, or /setup to change provider, key, model or folder.' }
   ];
   return seeded;
 })();
@@ -149,10 +186,11 @@ function limitLines(lines: TranscriptLine[], maxLines: number, expanded: boolean
   ];
 }
 
-function renderEventsToLines(events: UiEvent[], columns: number, expandedEventIds: Set<string>) {
+export function renderEventsToLines(events: UiEvent[], columns: number, expandedEventIds: Set<string>, verbose: boolean) {
   const lines: TranscriptLine[] = [];
 
   for (const event of events) {
+    if (!verbose && isDetailEvent(event)) continue;
     const expanded = expandedEventIds.has(event.id);
 
     if (event.type === 'user') {
@@ -198,11 +236,11 @@ function renderEventsToLines(events: UiEvent[], columns: number, expandedEventId
     }
 
     if (event.type === 'system') {
-      lines.push({ text: event.text || '', color: 'yellow' });
+      lines.push({ text: event.text || '', color: event.isError ? 'red' : 'yellow' });
     }
   }
 
-  return lines.length > 0 ? lines : [{ text: 'Type a message. Use PageUp/PageDown or Ctrl+U/Ctrl+D to scroll.', dimColor: true }];
+  return lines.length > 0 ? lines : [{ text: 'Type a message, or / to see the commands.', dimColor: true }];
 }
 
 function maskKey(key: string | undefined): string {
@@ -221,20 +259,55 @@ function findLatestExpandableEventId(events: UiEvent[]) {
   return null;
 }
 
-function InputBar({ onSubmit }: { onSubmit: (text: string) => void }) {
-  const [text, setText] = useState('');
+const COMMANDS: { name: string; description: string }[] = [
+  { name: '/help', description: 'list these commands' },
+  { name: '/setup', description: 'change provider, API key, model or folder' },
+  { name: '/config', description: 'show the current settings' },
+  { name: '/config set', description: 'change one setting' },
+  { name: '/config reload', description: 'discard edits and re-read the file' },
+  { name: '/verbose', description: 'show or hide tool activity' },
+  { name: '/clear', description: 'clear the transcript' },
+  { name: '/exit', description: 'quit' },
+];
 
-  const handleSubmit = (value: string) => {
-    if (value.trim()) {
-      onSubmit(value.trim());
-      setText('');
+const MAX_SUGGESTIONS = 6;
+
+/** Commands matching what has been typed so far. Empty unless the line starts with "/". */
+export function matchingCommands(draft: string): typeof COMMANDS {
+  if (!draft.startsWith('/')) return [];
+  return COMMANDS.filter(command => command.name.startsWith(draft) || draft === '/').slice(0, MAX_SUGGESTIONS);
+}
+
+function CommandMenu({ suggestions }: { suggestions: typeof COMMANDS }) {
+  if (suggestions.length === 0) return null;
+  const width = Math.max(...suggestions.map(command => command.name.length));
+  return (
+    <Box flexDirection="column">
+      {suggestions.map(command => (
+        <Text key={command.name} dimColor>
+          {'  '}{command.name.padEnd(width)}  {command.description}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+function InputBar({ value, onChange, onSubmit }: {
+  value: string;
+  onChange: (text: string) => void;
+  onSubmit: (text: string) => void;
+}) {
+  const handleSubmit = (submitted: string) => {
+    if (submitted.trim()) {
+      onSubmit(submitted.trim());
+      onChange('');
     }
   };
 
   return (
     <Box height={1} overflow="hidden">
       <Text color="blue" bold>User {'>'} </Text>
-      <TextInput value={text} onChange={setText} onSubmit={handleSubmit} />
+      <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} />
     </Box>
   );
 }
@@ -249,7 +322,7 @@ function StatusBar({ isBusy, connected, isPinnedToBottom }: { isBusy: boolean; c
       <Text color="dim">{isBusy ? 'Processing...' : 'Ready'}</Text>
       <Text color="dim"> | </Text>
       <Text color={isPinnedToBottom ? 'green' : 'yellow'}>{isPinnedToBottom ? 'Follow' : 'Scrolled'}</Text>
-      <Text color="dim"> | PgUp/PgDn Ctrl+U/D Home/End Ctrl+X</Text>
+      <Text color="dim"> | /help /setup | PgUp/PgDn Ctrl+U/D Home/End Ctrl+X</Text>
     </Box>
   );
 }
@@ -259,17 +332,29 @@ function StatusBar({ isBusy, connected, isPinnedToBottom }: { isBusy: boolean; c
  * LLM proxy against a placeholder key just produces an "invalid API key" error from
  * the provider with no indication of which file to edit.
  */
-export function SetupWizard({ onComplete }: { onComplete: (summary: string[]) => void }) {
+export function SetupWizard({ onComplete, onCancel }: {
+  onComplete: (summary: string[]) => void;
+  onCancel?: () => void;
+}) {
   const configured = String(cliConfig.apiProvider ?? '');
   const initialProvider: Provider =
     (PROVIDERS as readonly string[]).includes(configured) ? (configured as Provider) : 'gemini';
 
-  const [step, setStep] = useState<'provider' | 'key' | 'model'>('provider');
+  const [step, setStep] = useState<'provider' | 'key' | 'model' | 'workspace'>('provider');
   const [cursor, setCursor] = useState(Math.max(0, PROVIDERS.indexOf(initialProvider)));
   const [provider, setProvider] = useState<Provider>(initialProvider);
   const [keyValue, setKeyValue] = useState('');
   const [modelValue, setModelValue] = useState('');
+  const [workspaceValue, setWorkspaceValue] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [checking, setChecking] = useState(false);
+
+  // Only offered once there is a working config to fall back to. On a first run there is
+  // nothing to cancel back to, so Esc would just strand the user on an empty screen.
+  useInput((_input, key) => {
+    if (key.escape) onCancel!();
+  }, { isActive: Boolean(onCancel) && !checking });
 
   useInput((input, key) => {
     if (key.upArrow) { setCursor(c => (c + PROVIDERS.length - 1) % PROVIDERS.length); return; }
@@ -290,30 +375,68 @@ export function SetupWizard({ onComplete }: { onComplete: (summary: string[]) =>
     }
   }, { isActive: step === 'provider' });
 
-  const submitKey = (value: string) => {
+  // Checked against the provider before it is accepted. A key that only fails later, on
+  // the first chat turn, surfaces as an opaque 401 with the setup screen long gone.
+  const submitKey = async (value: string) => {
     const trimmed = value.trim();
     if (!trimmed || /^YOUR-/i.test(trimmed)) {
       setError('A real API key is required. Paste one to continue.');
       return;
     }
+
     setError('');
+    setNotice('');
+    setChecking(true);
+    const check = await verifyApiKey(provider, trimmed);
+    setChecking(false);
+
+    if (check.status === 'rejected') {
+      setError(`${check.message} Paste a different key, or press Esc to go back.`);
+      return;
+    }
+    // Being offline must not stop someone configuring the tool, so an unreachable
+    // provider is a warning rather than a refusal.
+    if (check.status === 'unknown') {
+      setNotice(`${check.message} Saving it unverified.`);
+    }
+
     setKeyValue(trimmed);
     setStep('model');
   };
 
   const submitModel = (value: string) => {
-    const model = value.trim() || PROVIDER_DEFAULT_MODEL[provider];
+    setModelValue(value.trim() || PROVIDER_DEFAULT_MODEL[provider]);
+    const existing = currentWorkspace();
+    setWorkspaceValue(existing.join(', '));
+    setError('');
+    setStep('workspace');
+  };
+
+  const submitWorkspace = (value: string) => {
+    const parsed = parseWorkspaceInput(value.trim() || invocationCwd());
+    if ('error' in parsed) {
+      setError(parsed.error);
+      return;
+    }
+
+    const model = modelValue.trim() || PROVIDER_DEFAULT_MODEL[provider];
     if (!cliConfig.llmProxy) {
       cliConfig.llmProxy = { enabled: true, port: 4141, host: '127.0.0.1' };
     }
     cliConfig.apiProvider = provider;
     cliConfig.llmProxy[PROVIDER_KEY_FIELD[provider]] = keyValue;
     cliConfig.llmProxy.model = model;
+    cliConfig.allowedDirectories = parsed.dirs;
 
     const err = persistConfig();
     onComplete(err
       ? [`Could not save config: ${err}`]
-      : [`Provider: ${PROVIDER_LABEL[provider]}`, `Model: ${model}`, `Saved to ${configPath}`]);
+      : [
+          `Provider: ${PROVIDER_LABEL[provider]}`,
+          `Model: ${model}`,
+          `Folders: ${parsed.dirs.join(', ')}`,
+          `Saved to ${configPath}`
+        ]);
   };
 
   return (
@@ -341,15 +464,19 @@ export function SetupWizard({ onComplete }: { onComplete: (summary: string[]) =>
           <Text>Paste your {PROVIDER_LABEL[provider]} API key.</Text>
           <Text dimColor>Get one at {PROVIDER_KEY_URL[provider]}</Text>
           <Box height={1} />
-          <Box>
-            <Text color="blue" bold>Key {'>'} </Text>
-            <TextInput
-              value={keyValue}
-              onChange={value => { setKeyValue(value); if (error) setError(''); }}
-              onSubmit={submitKey}
-              mask="*"
-            />
-          </Box>
+          {checking ? (
+            <Text color="cyan">Checking the key with {PROVIDER_LABEL[provider]}...</Text>
+          ) : (
+            <Box>
+              <Text color="blue" bold>Key {'>'} </Text>
+              <TextInput
+                value={keyValue}
+                onChange={value => { setKeyValue(value); if (error) setError(''); }}
+                onSubmit={value => { void submitKey(value); }}
+                mask="*"
+              />
+            </Box>
+          )}
           {error ? <Text color="red">{error}</Text> : null}
         </Box>
       ) : null}
@@ -362,7 +489,32 @@ export function SetupWizard({ onComplete }: { onComplete: (summary: string[]) =>
             <Text color="blue" bold>Model {'>'} </Text>
             <TextInput value={modelValue} onChange={setModelValue} onSubmit={submitModel} />
           </Box>
+          {notice ? <Text color="yellow">{notice}</Text> : null}
         </Box>
+      ) : null}
+
+      {step === 'workspace' ? (
+        <Box flexDirection="column">
+          <Text>Which folder should the agent be allowed to read and write?</Text>
+          <Text dimColor>Separate several with commas. Enter accepts the default.</Text>
+          <Box height={1} />
+          <Box>
+            <Text color="blue" bold>Folder {'>'} </Text>
+            <TextInput
+              value={workspaceValue}
+              onChange={value => { setWorkspaceValue(value); if (error) setError(''); }}
+              onSubmit={submitWorkspace}
+            />
+          </Box>
+          {error ? <Text color="red">{error}</Text> : null}
+        </Box>
+      ) : null}
+
+      {onCancel && !checking ? (
+        <>
+          <Box height={1} />
+          <Text dimColor>Esc to cancel and keep the current settings.</Text>
+        </>
       ) : null}
     </Box>
   );
@@ -377,14 +529,23 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
   const [scrollTopLine, setScrollTopLine] = useState(0);
   const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
   const [phase, setPhase] = useState<'setup' | 'chat'>(configNeedsSetup() ? 'setup' : 'chat');
+  // A first run has no working config to fall back to, so the wizard is not escapable
+  // there. Reached through /setup, it is.
+  const [setupIsOptional, setSetupIsOptional] = useState(false);
+  // Quiet by default: the tool-by-tool trace is the model showing its working, and it
+  // buries the actual answer. /verbose brings it back.
+  const [verbose, setVerbose] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [activity, setActivity] = useState<string | null>(null);
   const { stdout } = useStdout();
 
   const terminalRows = stdout.rows || 24;
   const terminalColumns = stdout.columns || 80;
-  const transcriptHeight = Math.max(4, terminalRows - 4);
+  const suggestions = useMemo(() => matchingCommands(draft), [draft]);
+  const transcriptHeight = Math.max(4, terminalRows - 4 - suggestions.length);
   const transcriptLines = useMemo(
-    () => renderEventsToLines(events, terminalColumns, expandedEventIds),
-    [events, terminalColumns, expandedEventIds]
+    () => renderEventsToLines(events, terminalColumns, expandedEventIds, verbose),
+    [events, terminalColumns, expandedEventIds, verbose]
   );
   const maxScrollTop = Math.max(0, transcriptLines.length - transcriptHeight);
   const visibleLines = transcriptLines.slice(scrollTopLine, scrollTopLine + transcriptHeight);
@@ -412,6 +573,11 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
     for (const line of summary) appendEvent({ type: 'system', text: line });
     setPhase('chat');
     restartGateway('Starting gateway...');
+  };
+
+  const cancelSetup = () => {
+    setPhase('chat');
+    appendEvent({ type: 'system', text: 'Setup cancelled. Nothing changed.' });
   };
 
   useInput((input, key) => {
@@ -503,7 +669,19 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
 
         if (!response.ok) {
           const err = await response.text();
-          appendEvent({ turnId, type: 'system', text: `System error: ${response.status} ${err}` });
+          // The proxy passes the provider's status straight through, so a rejected key
+          // arrives here as a bare 401. Saying which key and how to replace it is the
+          // difference between a fixable mistake and a dead end.
+          const isAuthFailure = response.status === 401 || response.status === 403;
+          if (isAuthFailure) {
+            const provider = cliConfig.apiProvider || 'gemini';
+            appendEvent({ turnId, type: 'system', isError: true, text:
+              `Your ${provider} API key was rejected (HTTP ${response.status}).` });
+            appendEvent({ turnId, type: 'system', text:
+              `Type /setup to enter a new one, or /config set ${provider}-key <key>.` });
+          } else {
+            appendEvent({ turnId, type: 'system', text: `System error: ${response.status} ${err}` });
+          }
           break;
         }
 
@@ -517,7 +695,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         const injectedCount = response.headers.get('X-JustBetter-Injected-Count');
         const injectedTools = response.headers.get('X-JustBetter-Injected-Tools');
         if (turns === 1 && injectedCount) {
-          appendEvent({ turnId, type: 'system', text: `[Gateway] Auto-injected ${injectedCount} tools: ${injectedTools}` });
+          appendEvent({ turnId, type: 'system', detail: true, text: `[Gateway] Auto-injected ${injectedCount} tools: ${injectedTools}` });
         }
 
         const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
@@ -551,6 +729,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
 
           appendEvent({ turnId, type: 'tool_request', name, argsText: formatToolArgs(rawArgs) });
           const runningEventId = appendEvent({ turnId, type: 'tool_running', name });
+          setActivity(name);
 
           let resultMsg: any;
           try {
@@ -638,6 +817,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
             });
           }
 
+          setActivity(null);
           history = [...history, resultMsg];
           setLlmMessages(history);
         }
@@ -655,7 +835,33 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
       }
 
       if (text === '/setup') {
+        setSetupIsOptional(!configNeedsSetup());
         setPhase('setup');
+        return;
+      }
+
+      if (text === '/verbose') {
+        const next = !verbose;
+        setVerbose(next);
+        appendEvent({ type: 'system', text: next
+          ? 'Verbose on: showing every tool call and its output.'
+          : 'Verbose off: tool activity is hidden. Failures are always shown.' });
+        return;
+      }
+
+      if (text === '/help' || text === '/?') {
+        const lines = [
+          `── Commands ──`,
+          `  /setup      change provider, API key, model or folder`,
+          `  /config     show the current settings and how to change one`,
+          `  /verbose    show or hide tool activity (currently ${verbose ? 'on' : 'off'})`,
+          `  /clear      clear the transcript`,
+          `  /help       this list`,
+          `  /exit       quit`,
+          ``,
+          `Keys: PgUp/PgDn or Ctrl+U/Ctrl+D to scroll, Home/End, Ctrl+X to expand output.`,
+        ];
+        for (const line of lines) appendEvent({ type: 'system', text: line });
         return;
       }
 
@@ -677,6 +883,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           `  Gemini Key:   ${maskKey(llm.geminiApiKey || llm.realApiKey)}`,
           `  Mistral Key:  ${maskKey(llm.mistralApiKey)}`,
           `  Model:        ${llm.model || '(not set)'}`,
+          `  Folders:      ${currentWorkspace().join(', ')}`,
           ``,
           `Commands:`,
           `  /setup                              re-run the guided setup`,
@@ -684,6 +891,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           `  /config set gemini-key <key>`,
           `  /config set mistral-key <key>`,
           `  /config set model <name>`,
+          `  /config set workspace <dir>[,<dir>] folders the agent may read and write`,
           `  /config reload                      discard edits, re-read file`,
           ``,
           `Changes are saved and applied immediately.`,
@@ -698,29 +906,50 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         const setting = text.slice(12).trim();
         const spaceIdx = setting.indexOf(' ');
         if (spaceIdx === -1) {
-          appendEvent({ type: 'system', text: 'Usage: /config set provider|gemini-key|mistral-key|model <value>' });
+          appendEvent({ type: 'system', text: 'Usage: /config set provider|gemini-key|mistral-key|model|workspace <value>' });
           return;
         }
         const key = setting.slice(0, spaceIdx);
-        const value = setting.slice(spaceIdx + 1);
+        const value = setting.slice(spaceIdx + 1).trim();
 
-        if (key === 'provider' && value !== 'gemini' && value !== 'mistral') {
-          appendEvent({ type: 'system', text: 'Provider must be "gemini" or "mistral"' });
-          return;
-        }
-
-        if (key !== 'provider' && !cliConfig.llmProxy) {
+        if (!cliConfig.llmProxy) {
           cliConfig.llmProxy = { enabled: true, port: 4141, host: '127.0.0.1' };
         }
 
         if (key === 'provider') {
+          if (value !== 'gemini' && value !== 'mistral') {
+            appendEvent({ type: 'system', text: 'Provider must be "gemini" or "mistral"' });
+            return;
+          }
           cliConfig.apiProvider = value;
-        } else if (key === 'gemini-key') {
-          cliConfig.llmProxy.geminiApiKey = value;
-        } else if (key === 'mistral-key') {
-          cliConfig.llmProxy.mistralApiKey = value;
+          // The model belongs to the provider. Leaving the old one behind is exactly how
+          // a Mistral model name ended up being sent to Gemini.
+          cliConfig.llmProxy.model = PROVIDER_DEFAULT_MODEL[value as Provider];
+          appendEvent({ type: 'system', text: `Model set to ${cliConfig.llmProxy.model} to match ${value}.` });
+          if (isPlaceholderApiKey(cliConfig)) {
+            appendEvent({ type: 'system', text: `No ${value} API key yet. Type /setup, or /config set ${value}-key <key>.` });
+          }
+        } else if (key === 'gemini-key' || key === 'mistral-key') {
+          const provider: Provider = key === 'gemini-key' ? 'gemini' : 'mistral';
+          appendEvent({ type: 'system', text: `Checking the key with ${PROVIDER_LABEL[provider]}...` });
+          const check = await verifyApiKey(provider, value);
+          if (check.status === 'rejected') {
+            appendEvent({ type: 'system', isError: true, text: `${check.message} The key was not saved.` });
+            return;
+          }
+          if (check.status === 'unknown') {
+            appendEvent({ type: 'system', text: `${check.message} Saving it unverified.` });
+          }
+          cliConfig.llmProxy[PROVIDER_KEY_FIELD[provider]] = value;
         } else if (key === 'model') {
           cliConfig.llmProxy.model = value;
+        } else if (key === 'workspace') {
+          const parsed = parseWorkspaceInput(value);
+          if ('error' in parsed) {
+            appendEvent({ type: 'system', isError: true, text: parsed.error });
+            return;
+          }
+          cliConfig.allowedDirectories = parsed.dirs;
         } else {
           appendEvent({ type: 'system', text: `Unknown setting: ${key}` });
           return;
@@ -771,11 +1000,12 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
     setLlmMessages(nextHistory);
 
     await runAgenticLoop(nextHistory, turnId);
+    setActivity(null);
     setIsBusy(false);
   };
 
   if (phase === 'setup') {
-    return <SetupWizard onComplete={finishSetup} />;
+    return <SetupWizard onComplete={finishSetup} {...(setupIsOptional ? { onCancel: cancelSetup } : {})} />;
   }
 
   return (
@@ -794,8 +1024,12 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         ))}
       </Box>
 
+      <CommandMenu suggestions={suggestions} />
+
       <Box height={1} overflow="hidden">
-        {isBusy ? <Text color="cyan">AI is thinking...</Text> : <InputBar onSubmit={handleSubmit} />}
+        {isBusy
+          ? <Text color="cyan">Thinking{activity ? ` — ${activity}` : ''}...</Text>
+          : <InputBar value={draft} onChange={setDraft} onSubmit={handleSubmit} />}
       </Box>
       <StatusBar isBusy={isBusy} connected={isConnected} isPinnedToBottom={isPinnedToBottom} />
       <Box height={1} overflow="hidden">
@@ -828,7 +1062,10 @@ export async function bootGateway(): Promise<string | null> {
       // place that knows how to locate the tsx runtime across hoisted and nested
       // node_modules layouts.
       args: [packagePath('bin', 'cli.js'), 'gateway', configPath],
-      cwd: PACKAGE_ROOT,
+      // Not the package root: a live process sitting in the install directory is what
+      // makes `npm install -g` fail with EBUSY on Windows. Every path passed above is
+      // absolute, so there is nothing here that needs a meaningful cwd.
+      cwd: os.tmpdir(),
       env: { ...(process.env as Record<string, string>), SILENCE_LOGS: '1' }
     });
 

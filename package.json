@@ -17,9 +17,19 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx tests/run-all.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "llm",
+    "tool-search",
+    "semantic-search",
+    "gateway",
+    "claude",
+    "cursor",
+    "ai-agent"
+  ],
+  "author": "Ronit Ranjan <ronitranjan222222@gmail.com>",
+  "license": "MIT",
   "description": "An MCP gateway with dynamic, retrieval-based tool injection.",
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
@@ -49,9 +59,18 @@
     "src/",
     "config.example.json",
     "tsconfig.json",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/igiamronit/justbetter-mcp.git"
+  },
+  "homepage": "https://github.com/igiamronit/justbetter-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/igiamronit/justbetter-mcp/issues"
   }
 }

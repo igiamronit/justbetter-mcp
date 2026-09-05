@@ -3,11 +3,12 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import readline from "readline";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import {
   smartTruncate, toolContentToText, pruneMessages, resolveProxyUrl,
   resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
 } from "./agent-common.js";
-import { PACKAGE_ROOT, packagePath, resolveConfigPath } from "./paths.js";
+import { packagePath, resolveConfigPath } from "./paths.js";
 
 const configPath = resolveConfigPath(process.argv[2]);
 let cliConfig: any = {};
@@ -187,15 +188,17 @@ async function start() {
   }
   
   // 1. Boot the gateway as a background process via MCP stdio.
-  //    Paths are resolved from this module's location and the child is given the
-  //    package root as its cwd, so `justbetter-cli` works from any directory.
+  //    Paths are resolved from this module's location, so `justbetter-cli` works from
+  //    any directory without the child needing a meaningful cwd.
   const transport = new StdioClientTransport({
     command: process.execPath,
     // Go through bin/cli.js rather than invoking tsx directly: it is the single
     // place that knows how to locate the tsx runtime across hoisted and nested
     // node_modules layouts.
     args: [packagePath("bin", "cli.js"), "gateway", configPath],
-    cwd: PACKAGE_ROOT,
+    // Not the package root: a live process sitting in the install directory is what
+    // makes `npm install -g` fail with EBUSY on Windows.
+    cwd: os.tmpdir(),
     env: process.env as Record<string, string> // Inherit env vars (secrets, etc)
   });
 

@@ -34,6 +34,19 @@ export function dataDir(): string {
   return dir;
 }
 
+/**
+ * The directory the user launched the CLI from.
+ *
+ * bin/cli.js records it in the environment before deliberately discarding cwd (see the
+ * EBUSY note there), so once the gateway is running out of a temp directory this env var
+ * is the only reliable answer. Falling back to process.cwd() keeps `npm run dev` and the
+ * tests, which never go through bin/cli.js, behaving the obvious way.
+ */
+export function invocationCwd(): string {
+  const recorded = process.env.JUSTBETTER_INVOCATION_CWD;
+  return recorded ? path.resolve(recorded) : process.cwd();
+}
+
 /** Absolute path for a file that lives alongside the gateway's own state. */
 export function dataPath(fileName: string): string {
   return path.join(dataDir(), fileName);

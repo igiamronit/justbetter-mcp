@@ -241,6 +241,10 @@ button.danger {
     background-color: var(--danger-color);
     box-shadow: 0 0 5px var(--danger-color);
 }
+/* Not an error: the server was never started because a credential it needs is absent. */
+.status-dot.skipped {
+    background-color: var(--warning-color, orange);
+}
 .status-dot.unknown {
     background-color: gray;
 }

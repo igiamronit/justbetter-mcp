@@ -1,7 +1,8 @@
 {
   "semanticPromptInjection": true,
   "injectAllTools": false,
-  "apiProvider": "mistral",
+  "apiProvider": "gemini",
+  "allowedDirectories": [],
   "upstreamServers": [
     {
       "name": "filesystem",
@@ -9,7 +10,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "."
+        "${JUSTBETTER_WORKSPACE}"
       ]
     },
     {
@@ -30,7 +31,7 @@
     "host": "127.0.0.1",
     "geminiApiKey": "YOUR-GEMINI-API-KEY",
     "mistralApiKey": "YOUR-MISTRAL-API-KEY",
-    "model": "mistral-large-latest"
+    "model": "gemini-2.0-flash"
   },
   "dashboard": {
     "enabled": true,

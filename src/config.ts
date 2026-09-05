@@ -45,6 +45,10 @@ export const ConfigSchema = z.object({
   semanticPromptInjection: z.boolean().default(true),
   injectAllTools: z.boolean().default(false),
   apiProvider: z.enum(["gemini", "mistral"]).default("gemini"),
+  // Folders the agent is allowed to touch. Substituted into upstream server args
+  // wherever "." or "${JUSTBETTER_WORKSPACE}" appears -- see resolveServerArgs.
+  // Empty means "the directory the CLI was launched from".
+  allowedDirectories: z.array(z.string()).default([]),
   upstreamServers: z.array(
     z.object({
       name: z.string(),
@@ -110,6 +114,45 @@ export function getEffectiveApiKey(config: Config): string {
 export function isPlaceholderApiKey(config: Config): boolean {
   const key = getEffectiveApiKey(config);
   return !key || /^YOUR-/i.test(key);
+}
+
+export type KeyCheck =
+  | { status: "valid" }
+  | { status: "rejected"; message: string }
+  | { status: "unknown"; message: string };
+
+/**
+ * Asks the provider whether a key works, using the cheapest authenticated endpoint
+ * both of them expose. The point is to reject a typo while the user still has the
+ * paste buffer open: without this, a bad key is only ever reported as an opaque 401
+ * on the first chat turn, long after the setup screen is gone.
+ *
+ * "unknown" is deliberately distinct from "rejected" -- being offline must not stop
+ * someone configuring the tool.
+ */
+export async function verifyApiKey(
+  provider: string,
+  key: string,
+  timeoutMs = 10_000
+): Promise<KeyCheck> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${getProviderBase(provider)}/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+    });
+    if (response.ok) return { status: "valid" };
+    if (response.status === 401 || response.status === 403) {
+      return { status: "rejected", message: `The provider rejected that key (HTTP ${response.status}).` };
+    }
+    return { status: "unknown", message: `The provider answered HTTP ${response.status}.` };
+  } catch (e: any) {
+    const reason = e?.name === "AbortError" ? "the request timed out" : (e?.message ?? String(e));
+    return { status: "unknown", message: `Could not reach the provider: ${reason}.` };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

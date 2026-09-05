@@ -93,6 +93,14 @@ const entry = path.join(packageRoot, TARGETS[command]);
 const child = spawn(process.execPath, [tsxPath, entry, ...rest], {
   stdio: "inherit",
   cwd: os.tmpdir(),
+  env: {
+    ...process.env,
+    // The folder the user actually typed the command in. cwd is thrown away above, so
+    // this is the only surviving record of it -- and it is what the agent's allowed
+    // directory defaults to. Preserved when already set, because the TUI re-enters this
+    // same script to spawn the gateway and its own cwd is not the user's.
+    JUSTBETTER_INVOCATION_CWD: process.env.JUSTBETTER_INVOCATION_CWD || process.cwd(),
+  },
 });
 
 child.on("error", (err) => {

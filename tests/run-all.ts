@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -439,6 +439,323 @@ const tests: TestCase[] = [
       } finally {
         await client.close().catch(() => undefined);
       }
+    }
+  },
+  {
+    name: 'upstream: workspace tokens expand to the user folders, not the install directory',
+    async fn() {
+      const { resolveServerArgs } = await import(srcModule('src/upstream.ts'));
+      const samePath = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+
+      const fsArgs = ['-y', '@modelcontextprotocol/server-filesystem', '.'];
+
+      // The bug this guards: "." used to resolve against the package root, so a global
+      // install confined the agent to node_modules/justbetter-mcp and every file
+      // operation on the user's own project failed.
+      const scoped = resolveServerArgs(fsArgs, [path.join(tempRoot, 'project')]);
+      assert.equal(scoped.length, 3);
+      assert.ok(samePath(scoped[2], path.join(tempRoot, 'project')), scoped[2]);
+      assert.ok(!scoped[2].includes('node_modules'), scoped[2]);
+
+      process.env.JUSTBETTER_INVOCATION_CWD = path.join(tempRoot, 'launched-here');
+      const fallback = resolveServerArgs(fsArgs, []);
+      assert.ok(samePath(fallback[2], path.join(tempRoot, 'launched-here')), fallback[2]);
+      delete process.env.JUSTBETTER_INVOCATION_CWD;
+
+      // One placeholder grants access to every configured folder.
+      const many = resolveServerArgs(['-y', 'srv', '${JUSTBETTER_WORKSPACE}'], [tempRoot, testsDir]);
+      assert.equal(many.length, 4);
+
+      // Package-relative script args must still resolve against the installation.
+      const script = resolveServerArgs(['tsx', 'src/terminal-server.ts'], [tempRoot]);
+      assert.ok(samePath(script[1], path.join(repoRoot, 'src/terminal-server.ts')), script[1]);
+
+      // Flags, absolute paths and bare package names are left alone.
+      assert.deepEqual(
+        resolveServerArgs(['-y', '@modelcontextprotocol/server-github'], [tempRoot]),
+        ['-y', '@modelcontextprotocol/server-github']
+      );
+    }
+  },
+  {
+    name: 'tui: setup wizard verifies the key, switches provider cleanly, and scopes the folder',
+    async fn() {
+      const React = (await import('react')).default;
+      const { render } = await import('ink');
+      const { PassThrough } = await import('node:stream');
+      const { EventEmitter } = await import('node:events');
+      const { readFileSync } = await import('node:fs');
+
+      const projectDir = tempFile('wizard-project');
+      mkdirSync(projectDir, { recursive: true });
+      const wizardConfig = tempFile('wizard-config.json');
+      writeJson(wizardConfig, {
+        apiProvider: 'gemini',
+        allowedDirectories: [],
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'YOUR-GEMINI-API-KEY', model: 'gemini-2.0-flash' }
+      });
+
+      // tui.tsx resolves its config path and reads the file at import time, so both the
+      // argv slot and the no-autostart opt-out have to be in place before the import.
+      const savedArgv = process.argv;
+      const savedFetch = globalThis.fetch;
+      process.argv = [savedArgv[0]!, 'test-harness', wizardConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+      process.env.JUSTBETTER_INVOCATION_CWD = projectDir;
+
+      const GOOD_KEY = 'sk-good-key-123456';
+      const attempted: string[] = [];
+      globalThis.fetch = (async (url: any, init: any) => {
+        const auth = String(init?.headers?.Authorization ?? '');
+        attempted.push(String(url));
+        const ok = auth === `Bearer ${GOOD_KEY}` || auth === 'Bearer sk-new-mistral';
+        return { ok, status: ok ? 200 : 401, text: async () => '', json: async () => ({}) };
+      }) as any;
+
+      const stripAnsi = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
+
+      function mountWizard(SetupWizard: any, withCancel: boolean) {
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 100;
+        stdout.rows = 30;
+        // Ink emits one frame as several writes wrapped in synchronized-output markers.
+        let buffer = '';
+        stdout.write = (chunk: any) => {
+          const text = String(chunk);
+          if (text.includes('\u001B[?2026h')) buffer = '';
+          buffer += text;
+          return true;
+        };
+
+        const state: any = { completed: null, cancelled: false };
+        const props: any = { onComplete: (summary: string[]) => { state.completed = summary; } };
+        if (withCancel) props.onCancel = () => { state.cancelled = true; };
+
+        const app = render(React.createElement(SetupWizard, props), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+        return { app, stdin, state, frame: () => stripAnsi(buffer) };
+      }
+
+      const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+      // Control keys must arrive one write at a time: ink parses a multi-character chunk
+      // as a paste and inserts it literally instead of acting on it.
+      const press = async (stdin: any, sequence: string, times = 1, ms = 30) => {
+        for (let i = 0; i < times; i++) { stdin.write(sequence); await wait(ms); }
+      };
+      const ENTER = '\r';
+      const DOWN = '\u001B[B';
+      const BACKSPACE = '\u007F';
+
+      try {
+        const { SetupWizard } = await import(srcModule('src/tui.tsx'));
+
+        // --- a wrong key must not be accepted, and must not be a dead end ---
+        const first = mountWizard(SetupWizard, false);
+        await wait(150);
+        assert.ok(first.frame().includes('Which API provider'), 'expected the provider step');
+        assert.ok(/>\s*1\. Google Gemini/.test(first.frame()), 'expected Gemini highlighted by default');
+        assert.ok(!first.frame().includes('Esc to cancel'), 'a first run has nothing to cancel back to');
+
+        await press(first.stdin, ENTER, 1, 120);
+        assert.ok(first.frame().includes('Paste your Google Gemini API key'), first.frame());
+
+        first.stdin.write('sk-typo');
+        await wait(80);
+        assert.ok(!first.frame().includes('sk-typo'), 'the key must be masked');
+
+        await press(first.stdin, ENTER, 1, 350);
+        assert.ok(first.frame().includes('Paste your Google Gemini API key'), 'a rejected key must keep you on the key step');
+        assert.ok(/rejected that key \(HTTP 401\)/.test(first.frame()), first.frame());
+        assert.ok(attempted.some(url => url.includes('/models')), 'the key should have been checked against the provider');
+
+        await press(first.stdin, BACKSPACE, 12);
+        first.stdin.write(GOOD_KEY);
+        await wait(80);
+        await press(first.stdin, ENTER, 1, 350);
+        assert.ok(first.frame().includes('Which model?'), first.frame());
+        assert.ok(first.frame().includes('gemini-2.0-flash'), 'the model default must match the provider');
+
+        await press(first.stdin, ENTER, 1, 120);
+        assert.ok(first.frame().includes('Which folder should the agent'), first.frame());
+        assert.ok(first.frame().includes(projectDir), 'the folder must default to where the CLI was launched');
+
+        await press(first.stdin, BACKSPACE, projectDir.length + 5, 3);
+        first.stdin.write(path.join(tempRoot, 'does-not-exist'));
+        await wait(80);
+        await press(first.stdin, ENTER, 1, 150);
+        assert.ok(first.frame().includes('No such folder'), 'a folder that does not exist must be rejected');
+
+        await press(first.stdin, BACKSPACE, 200, 2);
+        first.stdin.write(projectDir);
+        await wait(80);
+        await press(first.stdin, ENTER, 1, 250);
+        assert.ok(first.state.completed !== null, 'the wizard should have completed');
+        first.app.unmount();
+        await wait(80);
+
+        const saved = JSON.parse(readFileSync(wizardConfig, 'utf-8'));
+        assert.equal(saved.apiProvider, 'gemini');
+        assert.equal(saved.llmProxy.geminiApiKey, GOOD_KEY);
+        assert.equal(saved.llmProxy.model, 'gemini-2.0-flash');
+        assert.deepEqual(saved.allowedDirectories, [path.resolve(projectDir)]);
+
+        // --- switching provider must bring its own model with it ---
+        const second = mountWizard(SetupWizard, true);
+        await wait(150);
+        assert.ok(second.frame().includes('Esc to cancel'), 'a configured install must offer a way back');
+        await press(second.stdin, DOWN);
+        await press(second.stdin, ENTER, 1, 120);
+        assert.ok(second.frame().includes('Paste your Mistral API key'), second.frame());
+        assert.ok(!second.frame().includes('*'), 'the Gemini key must not be carried into the Mistral step');
+
+        second.stdin.write('sk-new-mistral');
+        await wait(80);
+        await press(second.stdin, ENTER, 1, 350);
+        assert.ok(second.frame().includes('mistral-large-latest'), second.frame());
+        assert.ok(!second.frame().includes('gemini-2.0-flash'), 'the Gemini model must not follow the provider switch');
+
+        await press(second.stdin, ENTER, 1, 120);
+        await press(second.stdin, ENTER, 1, 250);
+        assert.ok(second.state.completed !== null);
+        second.app.unmount();
+        await wait(80);
+
+        const switched = JSON.parse(readFileSync(wizardConfig, 'utf-8'));
+        assert.equal(switched.apiProvider, 'mistral');
+        assert.equal(switched.llmProxy.model, 'mistral-large-latest');
+        assert.equal(switched.llmProxy.mistralApiKey, 'sk-new-mistral');
+        assert.equal(switched.llmProxy.geminiApiKey, GOOD_KEY, 'the other provider key must survive');
+
+        // --- Esc must back out without touching the file ---
+        const snapshot = readFileSync(wizardConfig, 'utf-8');
+        const third = mountWizard(SetupWizard, true);
+        await wait(150);
+        third.stdin.write('\u001B');
+        await wait(200);
+        assert.equal(third.state.cancelled, true, 'Esc should cancel');
+        assert.equal(readFileSync(wizardConfig, 'utf-8'), snapshot, 'Esc must not change the config');
+        third.app.unmount();
+        await wait(80);
+      } finally {
+        process.argv = savedArgv;
+        globalThis.fetch = savedFetch;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+        delete process.env.JUSTBETTER_INVOCATION_CWD;
+      }
+    }
+  },
+  {
+    name: 'tui: quiet mode hides tool traffic but never failures, and / lists the commands',
+    async fn() {
+      const savedArgv = process.argv;
+      const quietConfig = tempFile('quiet-config.json');
+      writeJson(quietConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', quietConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { renderEventsToLines, matchingCommands } = await import(srcModule('src/tui.tsx'));
+
+        const events = [
+          { id: 'a', type: 'user', text: 'list my files' },
+          { id: 'b', type: 'system', detail: true, text: '[Gateway] Auto-injected 18 tools: read_text_file, write_file' },
+          { id: 'c', type: 'tool_request', name: 'list_directory', argsText: '{"path":"."}' },
+          { id: 'd', type: 'tool_result', name: 'list_directory', content: 'bin\nsrc', summary: 'Returned 8 characters' },
+          { id: 'e', type: 'tool_result', name: 'read_text_file', content: 'ENOENT', isError: true, summary: 'Failed' },
+          { id: 'f', type: 'assistant', text: 'Here are your files.' }
+        ];
+
+        const quiet = renderEventsToLines(events, 100, new Set(), false).map((line: any) => line.text).join('\n');
+        assert.ok(quiet.includes('list my files'), 'the user turn must survive');
+        assert.ok(quiet.includes('Here are your files.'), 'the answer must survive');
+        assert.ok(!quiet.includes('Auto-injected'), 'the injection trace is machinery');
+        assert.ok(!quiet.includes('Tool request'), 'tool calls are hidden by default');
+        assert.ok(!quiet.includes('list_directory'), 'successful tool traffic is hidden by default');
+        assert.ok(quiet.includes('read_text_file'), 'a FAILED tool must still be shown');
+
+        const loud = renderEventsToLines(events, 100, new Set(), true).map((line: any) => line.text).join('\n');
+        assert.ok(loud.includes('Auto-injected'), 'verbose restores the injection trace');
+        assert.ok(loud.includes('Tool request > list_directory'), 'verbose restores tool calls');
+        assert.ok(loud.includes('read_text_file'), 'verbose still shows failures');
+
+        // Typing "/" alone offers everything; typing more narrows it down.
+        const all = matchingCommands('/').map((command: any) => command.name);
+        assert.ok(all.length > 0, 'a bare slash must list commands');
+        assert.ok(all.includes('/setup') && all.includes('/help'), all.join(','));
+
+        const narrowed = matchingCommands('/con').map((command: any) => command.name);
+        assert.ok(narrowed.length > 0 && narrowed.every((name: string) => name.startsWith('/con')), narrowed.join(','));
+
+        assert.deepEqual(matchingCommands('hello'), [], 'ordinary text must not open the menu');
+        assert.deepEqual(matchingCommands('/zzz'), [], 'an unknown command matches nothing');
+      } finally {
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'upstream: a server whose credential never resolved is skipped, not offered',
+    async fn() {
+      const { connectSingleUpstream, serverStatuses, activeUpstreams } = await import(srcModule('src/upstream.ts'));
+      const { passesPreconditions } = await import(srcModule('src/gates/precondition.ts'));
+      const { ConfigSchema } = await import(srcModule('src/config.ts'));
+
+      const ABSENT = 'JUSTBETTER_TEST_ABSENT_TOKEN';
+      delete process.env[ABSENT];
+
+      const before = activeUpstreams.length;
+      await connectSingleUpstream({
+        name: 'needs-a-token',
+        // A command that would fail loudly if it were ever spawned.
+        command: 'definitely-not-a-real-command',
+        args: [],
+        env: { SOME_TOKEN: '${' + ABSENT + '}' }
+      });
+
+      assert.equal(serverStatuses['needs-a-token'], 'skipped');
+      assert.equal(activeUpstreams.length, before, 'nothing should have been spawned or registered');
+
+      // The point of skipping: the gate then hides every tool that server would own, so
+      // the model is never offered a call that can only come back as a 401.
+      const config = ConfigSchema.parse({ upstreamServers: [] });
+      assert.equal(passesPreconditions('create_issue', 'needs-a-token', config), false);
+
+      // With the credential present it is treated as a normal server again.
+      process.env[ABSENT] = 'token-value';
+      await connectSingleUpstream({
+        name: 'has-a-token',
+        command: 'definitely-not-a-real-command',
+        args: [],
+        env: { SOME_TOKEN: '${' + ABSENT + '}' }
+      });
+      assert.equal(serverStatuses['has-a-token'], 'failed', 'it should have been attempted, and failed to spawn');
+      delete process.env[ABSENT];
+    }
+  },
+  {
+    name: 'embeddings: the model cache lives in the state directory, not node_modules',
+    async fn() {
+      const { env } = await import('@huggingface/transformers');
+      await import(srcModule('src/embeddings.ts'));
+      const { dataPath } = await import(srcModule('src/paths.ts'));
+
+      assert.equal(env.cacheDir, dataPath('models'));
+      assert.ok(!String(env.cacheDir).includes('node_modules'),
+        `npm wipes node_modules on reinstall, so the model would re-download: ${env.cacheDir}`);
     }
   },
   {

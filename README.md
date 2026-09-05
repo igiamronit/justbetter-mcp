@@ -204,7 +204,8 @@ Create a `config.json` in the project root. Here is an example format detailing 
 {
   "semanticPromptInjection": false,
   "injectAllTools": false,
-  "apiProvider": "mistral",
+  "apiProvider": "gemini",
+  "allowedDirectories": [],
   "upstreamServers": [
     {
       "name": "filesystem",
@@ -212,7 +213,7 @@ Create a `config.json` in the project root. Here is an example format detailing 
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "./"
+        "${JUSTBETTER_WORKSPACE}"
       ]
     },
     {
@@ -276,8 +277,9 @@ Create a `config.json` in the project root. Here is an example format detailing 
 
 **Notes on configuration**
 
-- **Paths.** Upstream servers are spawned with the gateway's install directory as their working directory, so relative args like `src/terminal-server.ts` resolve no matter which client launched the gateway. Add a `"cwd"` to an upstream entry to override this. The gateway's own state (`catalog.db`, `token_log.csv`) always lives in the install directory, or in `JUSTBETTER_HOME` if that is set.
-- **Secrets.** Any `${NAME}` in an upstream `env` value is expanded from the process environment, falling back to `~/.justbetter-mcp/secrets.json` (created `0600`). Provider keys resolve in the order `config.json` → environment (`GEMINI_API_KEY` / `MISTRAL_API_KEY`) → that secrets file, so credentials need not sit in the project directory where the filesystem server can read them back.
+- **Paths.** Upstream servers run from a temporary directory, because a process sitting in the install folder makes `npm install -g` fail with `EBUSY` on Windows. Relative args like `src/terminal-server.ts` are instead resolved against the installation before the server is spawned, so they work no matter which client launched the gateway. Add a `"cwd"` to an upstream entry to override the working directory. The gateway's own state (`catalog.db`, `token_log.csv`) lives in `~/.justbetter-mcp`, or in `JUSTBETTER_HOME` if that is set.
+- **`allowedDirectories`.** The folders the agent may read and write. Any upstream arg that is `"."` or `"${JUSTBETTER_WORKSPACE}"` is replaced with this list — one placeholder expands to every folder, since the filesystem server accepts any number of paths. Leave it empty and it falls back to the directory the CLI was launched from. Set it from the TUI with `/setup` or `/config set workspace <dir>[,<dir>]`.
+- **Secrets.** Any `${NAME}` in an upstream `env` value is expanded from the process environment, falling back to `~/.justbetter-mcp/secrets.json` (created `0600`). Provider keys resolve in the order `config.json` → environment (`GEMINI_API_KEY` / `MISTRAL_API_KEY`) → that secrets file, so credentials need not sit in the project directory where the filesystem server can read them back. An upstream whose `${NAME}` never resolves is **skipped**, not started: an unusable server would otherwise advertise its tools, get them indexed, and have the model call one only to receive a 401.
 - **`destructiveTools`.** Names listed here require an OS dialog confirmation before every execution. They must match the tool names the upstream server actually exposes (the filesystem server's reader is `read_text_file`, not `read_file`).
 - **Ports.** Both servers bind loopback. `llmProxy.authToken`, when set, is additionally required as a bearer token on `/v1`. The dashboard always requires the session token printed at startup.
 
