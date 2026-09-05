@@ -2,6 +2,8 @@
   <h1>JustBetter MCP</h1>
   <p><em>An MCP gateway with dynamic, retrieval-based tool injection.</em></p>
   <p>
+    <a href="https://www.npmjs.com/package/justbetter-mcp"><img src="https://img.shields.io/npm/v/justbetter-mcp?color=cb3837&logo=npm" alt="npm version" /></a>
+    <img src="https://img.shields.io/npm/l/justbetter-mcp?color=blue" alt="MIT license" />
     <img src="https://img.shields.io/badge/TypeScript-5.0-blue" alt="TypeScript" />
     <img src="https://img.shields.io/badge/Node.js-18+-green" alt="Node" />
     <img src="https://img.shields.io/badge/ONNX-MiniLM-orange" alt="ONNX" />
@@ -23,7 +25,43 @@
 
 ---
 
+## Install
+
+```bash
+npx justbetter-mcp
+```
+
+The first run opens a setup wizard: pick a provider, paste an API key (verified against the
+provider before it is saved), choose a model, and choose which folder the agent is allowed to
+read and write. There is no JSON to hand-author.
+
+**Mode 2 — Claude Desktop, Cursor, or any MCP client.** Add this to the client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "justbetter": {
+      "command": "npx",
+      "args": ["-y", "justbetter-mcp", "gateway"]
+    }
+  }
+}
+```
+
+The client will see exactly two tools, `request_tools` and `batch_call`. Everything else is
+retrieved on demand — that is the whole point.
+
+> **Mode 1 needs a client that lets you set an OpenAI-compatible base URL.** The bundled TUI is
+> the reference client and always works. Cline, Roo, Continue, aider and Zed accept a custom base
+> URL; Cursor is inconsistent across versions; **Claude Desktop cannot, and is Mode 2 only.**
+
+State lives in `~/.justbetter-mcp` — config, tool catalog, and the embedding model. Nothing is
+written into the directory you run from. Full reference: [Setup & Quickstart](#setup--quickstart).
+
+---
+
 ### Quick Links
+- [Install](#install)
 - [Architecture & How It Works](#architecture--how-it-works)
 - [Token Usage Analysis](#token-usage-analysis)
 - [Setup & How to Use](#setup--quickstart)
@@ -284,6 +322,17 @@ Create a `config.json` in the project root. Here is an example format detailing 
 - **Ports.** Both servers bind loopback. `llmProxy.authToken`, when set, is additionally required as a bearer token on `/v1`. The dashboard always requires the session token printed at startup.
 
 ### Running the Gateway & TUI
+
+**Installed from npm** — the subcommands are the interface:
+```bash
+justbetter-mcp             # Mode 1: interactive TUI (the default)
+justbetter-mcp chat        # Mode 1, plain readline client, no full-screen UI
+justbetter-mcp gateway     # Mode 2: stdio server, for an MCP client to spawn
+justbetter-mcp --help
+```
+Any extra argument is treated as a path to a config file.
+
+**From a clone**, for contributors:
 1. **Install dependencies:**
    ```bash
    npm install
@@ -294,16 +343,30 @@ Create a `config.json` in the project root. Here is an example format detailing 
    npm run tui        # Mode 1, Ink-based terminal UI
    npm start          # gateway only (what an MCP client should spawn)
    ```
-3. **Open the dashboard.** The management API can start processes, so it is token-gated. The startup log prints the URL to use:
+
+**Open the dashboard.** The management API can start processes, so it is token-gated. The startup log prints the URL to use:
    ```
    [Dashboard] Local management UI: http://127.0.0.1:4040/?token=<generated at boot>
    ```
 
 ### Connecting a client
 
-**Mode 1 — JustBetter CLI.** Set `"semanticPromptInjection": true` and run `npm run dev`. The CLI talks to the LLM proxy, which injects schemas before the request reaches the provider.
+**Mode 1 — JustBetter CLI.** Set `"semanticPromptInjection": true` and run `justbetter-mcp` (or `npm run dev` from a clone). The CLI talks to the LLM proxy, which injects schemas before the request reaches the provider.
 
 **Mode 2 — Claude Desktop, Cursor, or any MCP client.** Set `"semanticPromptInjection": false` and register the gateway as an stdio MCP server. These clients spawn the gateway themselves, so there is no base URL to configure:
+
+```json
+{
+  "mcpServers": {
+    "justbetter": {
+      "command": "npx",
+      "args": ["-y", "justbetter-mcp", "gateway"]
+    }
+  }
+}
+```
+
+From a clone instead, point the client at the checkout:
 
 ```json
 {
