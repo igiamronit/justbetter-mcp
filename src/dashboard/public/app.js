@@ -61,7 +61,8 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.appendChild(nameCell);
 
             const cmdCell = document.createElement('td');
-            const code = el('code', null, `${server.command} ${(server.args || []).join(' ')}`);
+            const displayTarget = server.url ? server.url : `${server.command || ''} ${(server.args || []).join(' ')}`.trim();
+            const code = el('code', null, displayTarget);
             code.style.background = 'var(--hover-bg)';
             code.style.padding = '2px 4px';
             cmdCell.appendChild(code);

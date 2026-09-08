@@ -78,15 +78,20 @@ export function resolveServerArgs(args: string[], allowedDirectories: string[] =
  * 401. Hiding those tools is more honest than offering them: the whole point of this
  * gateway is putting the *usable* tools in front of the model.
  */
-function unresolvedSecrets(env?: Record<string, string>): string[] {
-  const resolved = resolveServerEnv(env);
-  if (!resolved) return [];
-  const missing: string[] = [];
-  for (const value of Object.values(resolved)) {
-    const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value.trim());
-    if (match?.[1]) missing.push(match[1]);
-  }
-  return missing;
+function unresolvedSecrets(env?: Record<string, string>, headers?: Record<string, string>): string[] {
+  const check = (rec?: Record<string, string>) => {
+    const resolved = resolveServerEnv(rec);
+    if (!resolved) return [];
+    const missing: string[] = [];
+    for (const value of Object.values(resolved)) {
+      const matches = value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g);
+      for (const match of matches) {
+        if (match[1]) missing.push(match[1]);
+      }
+    }
+    return missing;
+  };
+  return [...check(env), ...check(headers)];
 }
 
 export async function connectSingleUpstream(rawServerConfig: any, allowedDirectories: string[] = [], connectionTimeoutMs: number = 20_000): Promise<void> {
@@ -95,8 +100,21 @@ export async function connectSingleUpstream(rawServerConfig: any, allowedDirecto
   // server entry.
   const serverConfig = UpstreamServerSchema.parse(rawServerConfig);
 
+  // Checked before spawning or dialing: an unusable server costs a process or network
+  // roundtrip, an index pass, and a catalog entry, and the precondition gate hides its
+  // tools anyway once it is not marked connected.
+  const missingSecrets = unresolvedSecrets(serverConfig.env, serverConfig.headers);
+  if (missingSecrets.length > 0) {
+    serverStatuses[serverConfig.name] = 'skipped';
+    console.error(
+      `[Upstream Manager] Skipping '${serverConfig.name}': ${missingSecrets.join(', ')} not set. ` +
+      `Set it in the environment or in ~/.justbetter-mcp/secrets.json to enable these tools.`
+    );
+    return;
+  }
+
   if (serverConfig.url) {
-    const headers: Record<string, string> = { ...(serverConfig.headers ?? {}) };
+    const headers: Record<string, string> = { ...(resolveServerEnv(serverConfig.headers) ?? {}) };
     console.error(`Connecting to upstream HTTP server: ${serverConfig.name} (${serverConfig.url})...`);
 
     try {
@@ -110,19 +128,21 @@ export async function connectSingleUpstream(rawServerConfig: any, allowedDirecto
         { capabilities: {} }
       );
 
-      const timeoutHandle = setTimeout(() => {
-        client.close().catch(() => {});
-      }, connectionTimeoutMs);
+      let timerHandle: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timerHandle = setTimeout(() => {
+          client.close().catch(() => {});
+          reject(new Error(`connection timed out after ${connectionTimeoutMs}ms`));
+        }, connectionTimeoutMs);
+      });
 
       try {
         await Promise.race([
           client.connect(transport as Transport),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`connection timed out after ${connectionTimeoutMs}ms`)), connectionTimeoutMs)
-          )
+          timeoutPromise
         ]);
       } finally {
-        clearTimeout(timeoutHandle);
+        if (timerHandle) clearTimeout(timerHandle);
       }
 
       const toolsResponse = await client.listTools();
@@ -141,19 +161,6 @@ export async function connectSingleUpstream(rawServerConfig: any, allowedDirecto
       console.error(`\n⚠️ Failed to connect to HTTP server '${serverConfig.name}': ${error.message}`);
       serverStatuses[serverConfig.name] = 'failed';
     }
-    return;
-  }
-
-  // Checked before spawning: an unusable server costs a process, an index pass, and a
-  // catalog entry, and the precondition gate hides its tools anyway once it is not
-  // marked connected.
-  const missingSecrets = unresolvedSecrets(serverConfig.env);
-  if (missingSecrets.length > 0) {
-    serverStatuses[serverConfig.name] = 'skipped';
-    console.error(
-      `[Upstream Manager] Skipping '${serverConfig.name}': ${missingSecrets.join(', ')} not set. ` +
-      `Set it in the environment or in ~/.justbetter-mcp/secrets.json to enable these tools.`
-    );
     return;
   }
 

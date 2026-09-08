@@ -168,6 +168,13 @@ const tests: TestCase[] = [
         upstreamServers: [{ name: 'both-upstream', command: 'node', url: 'https://example.com/mcp' }]
       });
       await expectRejects(() => loadConfig(bothPath));
+
+      // Invalid URL format → reject
+      const invalidUrlPath = tempFile('config-invalid-url.json');
+      writeJson(invalidUrlPath, {
+        upstreamServers: [{ name: 'bad-url-upstream', url: 'not-a-valid-url' }]
+      });
+      await expectRejects(() => loadConfig(invalidUrlPath));
     }
   },
   {
@@ -821,9 +828,26 @@ const tests: TestCase[] = [
         assert.ok(elapsed < 7_000, `timeout should fire in under 7s, took ${elapsed}ms`);
         assert.equal(serverStatuses['stall-server'], 'failed');
       } finally {
+        (server as any).closeAllConnections?.();
         server.close();
         delete serverStatuses['stall-server'];
       }
+    }
+  },
+  {
+    name: 'upstream: HTTP server with missing header secret is skipped, not attempted',
+    async fn() {
+      const { connectSingleUpstream, serverStatuses } = await import(srcModule('src/upstream.ts'));
+      const ABSENT = 'JUSTBETTER_TEST_ABSENT_HEADER_' + Date.now();
+      delete process.env[ABSENT];
+
+      await connectSingleUpstream({
+        name: 'needs-header-token',
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer ${' + ABSENT + '}' }
+      });
+      assert.equal(serverStatuses['needs-header-token'], 'skipped', 'server with unresolved header secret should be skipped');
+      delete serverStatuses['needs-header-token'];
     }
   },
   {

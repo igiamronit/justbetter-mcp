@@ -59,7 +59,7 @@ export const ConfigSchema = z.object({
       // root so relative args (e.g. "src/terminal-server.ts") resolve against the
       // installation rather than whatever directory the MCP client launched us from.
       cwd: z.string().optional(),
-      url: z.string().optional(),
+      url: z.string().url().optional(),
       headers: z.record(z.string(), z.string()).optional(),
     }).refine(
       // XOR clamp for backwards-compatibility with existing configs that lack a
