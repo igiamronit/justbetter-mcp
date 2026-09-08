@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 This project uses [Semantic Versioning](https://semver.org/). While on `0.x`, the config
 format and CLI surface may change between minor versions.
 
+## [Unreleased]
+
+### Added
+
+- **Remote HTTP/SSE Upstream Server Support ([#6](https://github.com/igiamronit/justbetter-mcp/pull/6)).** Upstream servers can now connect to remote MCP endpoints over Streamable HTTP/SSE using `"url"` and optional `"headers"`:
+  - Header values support `${NAME}` placeholder expansion from environment variables and `~/.justbetter-mcp/secrets.json`.
+  - Servers with missing credentials in headers are cleanly marked `'skipped'` and excluded from active tools.
+  - Per-connection timeout protection via `upstreamConnectionTimeoutMs` (default 20s).
+  - Validates URLs via Zod schema and enforces `command` XOR `url` exclusivity.
+  - Dashboard table displays `server.url` for remote endpoints.
+
 ## [0.1.1] — 2026-09-06
 
 ### Fixed
