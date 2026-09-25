@@ -73,10 +73,20 @@ const WORKSPACE_TOKENS = new Set([".", "./", ".\\", "${JUSTBETTER_WORKSPACE}"]);
  * flatMap: the filesystem server takes any number of paths, so one placeholder in the
  * config can grant access to several folders.
  */
-export function resolveServerArgs(args: string[], allowedDirectories: string[] = []): string[] {
-  const workspace = allowedDirectories.length > 0
+/**
+ * The folders the agent is meant to work in, most important first.
+ *
+ * One definition, used both to expand ${JUSTBETTER_WORKSPACE} in args and to tell servers
+ * that take no path argument where the user actually is -- see the env below.
+ */
+export function workspaceDirs(allowedDirectories: string[] = []): string[] {
+  return allowedDirectories.length > 0
     ? allowedDirectories.map(dir => path.resolve(dir))
     : [invocationCwd()];
+}
+
+export function resolveServerArgs(args: string[], allowedDirectories: string[] = []): string[] {
+  const workspace = workspaceDirs(allowedDirectories);
 
   return args.flatMap(arg => {
     if (WORKSPACE_TOKENS.has(arg)) return workspace;
@@ -210,7 +220,16 @@ export async function connectSingleUpstream(rawServerConfig: any, allowedDirecto
       args: resolveServerArgs(serverConfig.args, allowedDirectories),
       cwd: serverConfig.cwd ?? os.tmpdir(),
       stderr: 'pipe',
-      env: { ...process.env, ...(resolveServerEnv(serverConfig.env) || {}) } as Record<string, string>,
+      // Upstreams run from a temp directory on purpose: a process sitting in the install
+      // folder is what makes `npm install -g` fail with EBUSY on Windows. That leaves a
+      // server which takes no path argument -- the terminal -- with no idea where the user
+      // is, so `npm test` ran in %TEMP% and failed on a missing package.json. This names
+      // the workspace for them without any process holding a handle on it.
+      env: {
+        ...process.env,
+        JUSTBETTER_WORKSPACE: workspaceDirs(allowedDirectories)[0] ?? os.tmpdir(),
+        ...(resolveServerEnv(serverConfig.env) || {})
+      } as Record<string, string>,
     });
 
     // Capture the child's stderr so it does not leak to the parent terminal

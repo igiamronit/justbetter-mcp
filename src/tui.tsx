@@ -1,533 +1,51 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { render, Box, Text, useInput, useStdout } from 'ink';
-import TextInput from 'ink-text-input';
+import { render, Box, Static, useInput, useStdout } from 'ink';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import fs from 'fs';
-import path from 'path';
 import os from 'os';
 import {
-  smartTruncate, toolContentToText, pruneMessages, resolveProxyUrl,
+  smartTruncate, toolContentToText, pruneMessages,
   resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
 } from './agent-common.js';
-import { packagePath, resolveConfigPath, invocationCwd } from './paths.js';
+import { packagePath } from './paths.js';
 import { isPlaceholderApiKey, verifyApiKey } from './config.js';
-
-const configPath = resolveConfigPath(process.argv[2]);
-let cliConfig: any = {};
-try {
-  cliConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-} catch (e: any) {
-  // The proxy will surface config errors if they matter at runtime.
-}
-
-/** Recomputed on demand: the setup wizard can change proxy settings at runtime. */
-const proxyUrl = () => resolveProxyUrl(cliConfig);
-
-const PROVIDERS = ['gemini', 'mistral'] as const;
-type Provider = (typeof PROVIDERS)[number];
-
-const PROVIDER_LABEL: Record<Provider, string> = {
-  gemini: 'Google Gemini',
-  mistral: 'Mistral',
-};
-
-const PROVIDER_KEY_FIELD: Record<Provider, string> = {
-  gemini: 'geminiApiKey',
-  mistral: 'mistralApiKey',
-};
-
-const PROVIDER_DEFAULT_MODEL: Record<Provider, string> = {
-  gemini: 'gemini-2.0-flash',
-  mistral: 'mistral-large-latest',
-};
-
-const PROVIDER_KEY_URL: Record<Provider, string> = {
-  gemini: 'aistudio.google.com/apikey',
-  mistral: 'console.mistral.ai/api-keys',
-};
-
-/** True when the config cannot drive a chat turn yet, so the wizard runs first. */
-function configNeedsSetup(): boolean {
-  return !cliConfig.llmProxy || isPlaceholderApiKey(cliConfig);
-}
-
-/** Folders the agent may touch, as configured. Empty means "wherever you ran the CLI". */
-function currentWorkspace(): string[] {
-  const configured = Array.isArray(cliConfig.allowedDirectories) ? cliConfig.allowedDirectories : [];
-  return configured.length > 0 ? configured : [invocationCwd()];
-}
-
-/** Accepts one path or several separated by commas, and rejects any that do not exist. */
-function parseWorkspaceInput(value: string): { dirs: string[] } | { error: string } {
-  const parts = value.split(',').map(part => part.trim()).filter(Boolean);
-  if (parts.length === 0) return { error: 'Enter at least one folder.' };
-
-  const dirs: string[] = [];
-  for (const part of parts) {
-    const resolved = path.resolve(part);
-    if (!fs.existsSync(resolved)) return { error: `No such folder: ${resolved}` };
-    dirs.push(resolved);
-  }
-  return { dirs };
-}
-
-/** Writes cliConfig back to disk. Returns an error message, or null on success. */
-function persistConfig(): string | null {
-  try {
-    fs.writeFileSync(configPath, JSON.stringify(cliConfig, null, 2), 'utf-8');
-    return null;
-  } catch (e: any) {
-    return e?.message ?? String(e);
-  }
-}
-
-const INITIAL_LLM_MESSAGES = [{ role: 'system', content: 'JUSTBETTER_CLI_AGENT' }];
-const MAX_TURNS = 20;
-const ASSISTANT_PREVIEW_LINES = 8;
-const TOOL_CONTENT_PREVIEW_LINES = 6;
-const TOOL_ARGS_PREVIEW_LINES = 3;
-
-type UiEventType = 'user' | 'assistant' | 'tool_request' | 'tool_running' | 'tool_result' | 'system';
-
-type UiEvent = {
-  id: string;
-  turnId?: string;
-  type: UiEventType;
-  text?: string;
-  name?: string;
-  argsText?: string;
-  summary?: string;
-  content?: string;
-  isError?: boolean;
-  /** Machinery rather than conversation: hidden unless /verbose is on. */
-  detail?: boolean;
-};
-
-/**
- * What the transcript hides in quiet mode. Successful tool traffic is the model showing
- * its working, which is noise most of the time -- but a failure is something the user has
- * to see, so errors are never hidden.
- */
-function isDetailEvent(event: UiEvent): boolean {
-  if (event.isError) return false;
-  if (event.detail) return true;
-  return event.type === 'tool_request' || event.type === 'tool_running' || event.type === 'tool_result';
-}
-
-const STARTUP_EVENTS: UiEvent[] = (() => {
-  const seeded: UiEvent[] = [
-    { id: 'startup-config', type: 'system', text: `Config: ${configPath}` },
-    // Without this line the only route to /setup is /config, which you have to already
-    // know to type -- so a rejected API key looked like a dead end.
-    { id: 'startup-help', type: 'system', text: 'Type / to see the commands, or /setup to change provider, key, model or folder.' }
-  ];
-  return seeded;
-})();
-
-type TranscriptLine = {
-  text: string;
-  color?: string;
-  bold?: boolean;
-  dimColor?: boolean;
-};
-
-function createId() {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function formatToolArgs(rawArgs: any) {
-  try {
-    const value = typeof rawArgs === 'string' ? JSON.parse(rawArgs || '{}') : rawArgs;
-    return JSON.stringify(value ?? {}, null, 2);
-  } catch {
-    return String(rawArgs ?? '{}');
-  }
-}
-
-function wrapText(text: any, columns: number) {
-  const width = Math.max(20, columns);
-  const rawLines = String(text ?? '').split('\n');
-  const lines: string[] = [];
-
-  for (const rawLine of rawLines) {
-    if (rawLine.length === 0) {
-      lines.push('');
-      continue;
-    }
-
-    for (let i = 0; i < rawLine.length; i += width) {
-      lines.push(rawLine.slice(i, i + width));
-    }
-  }
-
-  return lines;
-}
-
-function prefixedLines(prefix: string, text: any, columns: number, line: Omit<TranscriptLine, 'text'> = {}) {
-  const firstWidth = Math.max(20, columns - prefix.length);
-  const continuation = ' '.repeat(prefix.length);
-  const wrapped = wrapText(text, firstWidth);
-
-  if (wrapped.length === 0) return [{ ...line, text: prefix }];
-
-  return wrapped.map((wrappedLine, index) => ({
-    ...line,
-    text: `${index === 0 ? prefix : continuation}${wrappedLine}`
-  }));
-}
-
-function limitLines(lines: TranscriptLine[], maxLines: number, expanded: boolean, marker: string) {
-  if (expanded || lines.length <= maxLines) return lines;
-  const hidden = lines.length - maxLines;
-  return [
-    ...lines.slice(0, maxLines),
-    { text: `${marker} ${hidden} more lines. Press Ctrl+X to expand latest output.`, color: 'yellow' }
-  ];
-}
-
-export function renderEventsToLines(events: UiEvent[], columns: number, expandedEventIds: Set<string>, verbose: boolean) {
-  const lines: TranscriptLine[] = [];
-
-  for (const event of events) {
-    if (!verbose && isDetailEvent(event)) continue;
-    const expanded = expandedEventIds.has(event.id);
-
-    if (event.type === 'user') {
-      lines.push({ text: '' });
-      lines.push(...prefixedLines('You > ', event.text, columns, { color: 'blue', bold: true }));
-      continue;
-    }
-
-    if (event.type === 'assistant') {
-      lines.push({ text: '' });
-      lines.push({ text: 'Assistant >', color: 'magenta', bold: true });
-      const bodyLines = wrapText(event.text, columns).map(text => ({ text }));
-      lines.push(...limitLines(bodyLines, ASSISTANT_PREVIEW_LINES, expanded, '[assistant collapsed]'));
-      continue;
-    }
-
-    if (event.type === 'tool_request') {
-      lines.push({ text: `Tool request > ${event.name}`, color: 'cyan', bold: true });
-      const argLines = wrapText(event.argsText || '{}', columns).map(text => ({ text, dimColor: true }));
-      lines.push(...limitLines(argLines, TOOL_ARGS_PREVIEW_LINES, expanded, '[args collapsed]'));
-      continue;
-    }
-
-    if (event.type === 'tool_running') {
-      lines.push({ text: `Tool running > ${event.name}`, color: 'cyan' });
-      continue;
-    }
-
-    if (event.type === 'tool_result') {
-      const color = event.isError ? 'red' : 'green';
-      const label = event.isError ? 'Tool failed' : 'Tool done';
-      lines.push({ text: `${label} > ${event.name} - ${event.summary || 'Completed'}`, color, ...(event.isError ? { bold: true } : {}) });
-
-      if (event.content && (event.isError || expanded)) {
-        const resultLines: TranscriptLine[] = wrapText(event.content, columns).map(text => (
-          event.isError ? { text, color: 'red', dimColor: true } : { text, dimColor: true }
-        ));
-        lines.push(...limitLines(resultLines, TOOL_CONTENT_PREVIEW_LINES, expanded, '[tool output collapsed]'));
-      } else if (event.content && !event.isError) {
-        lines.push({ text: 'Press Ctrl+X to expand latest tool output.', dimColor: true });
-      }
-      continue;
-    }
-
-    if (event.type === 'system') {
-      lines.push({ text: event.text || '', color: event.isError ? 'red' : 'yellow' });
-    }
-  }
-
-  return lines.length > 0 ? lines : [{ text: 'Type a message, or / to see the commands.', dimColor: true }];
-}
-
-function maskKey(key: string | undefined): string {
-  if (!key || key.length < 8) return '********';
-  return key.slice(0, 4) + '...' + key.slice(-4);
-}
-
-function findLatestExpandableEventId(events: UiEvent[]) {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (!event) continue;
-    if ((event.type === 'assistant' && event.text) || (event.type === 'tool_result' && event.content) || event.type === 'tool_request') {
-      return event.id;
-    }
-  }
-  return null;
-}
-
-const COMMANDS: { name: string; description: string }[] = [
-  { name: '/help', description: 'list these commands' },
-  { name: '/setup', description: 'change provider, API key, model or folder' },
-  { name: '/config', description: 'show the current settings' },
-  { name: '/config set', description: 'change one setting' },
-  { name: '/config reload', description: 'discard edits and re-read the file' },
-  { name: '/verbose', description: 'show or hide tool activity' },
-  { name: '/clear', description: 'clear the transcript' },
-  { name: '/exit', description: 'quit' },
-];
-
-const MAX_SUGGESTIONS = 6;
-
-/** Commands matching what has been typed so far. Empty unless the line starts with "/". */
-export function matchingCommands(draft: string): typeof COMMANDS {
-  if (!draft.startsWith('/')) return [];
-  return COMMANDS.filter(command => command.name.startsWith(draft) || draft === '/').slice(0, MAX_SUGGESTIONS);
-}
-
-function CommandMenu({ suggestions }: { suggestions: typeof COMMANDS }) {
-  if (suggestions.length === 0) return null;
-  const width = Math.max(...suggestions.map(command => command.name.length));
-  return (
-    <Box flexDirection="column">
-      {suggestions.map(command => (
-        <Text key={command.name} dimColor>
-          {'  '}{command.name.padEnd(width)}  {command.description}
-        </Text>
-      ))}
-    </Box>
-  );
-}
-
-function InputBar({ value, onChange, onSubmit }: {
-  value: string;
-  onChange: (text: string) => void;
-  onSubmit: (text: string) => void;
-}) {
-  const handleSubmit = (submitted: string) => {
-    if (submitted.trim()) {
-      onSubmit(submitted.trim());
-      onChange('');
-    }
-  };
-
-  return (
-    <Box height={1} overflow="hidden">
-      <Text color="blue" bold>User {'>'} </Text>
-      <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} />
-    </Box>
-  );
-}
-
-function StatusBar({ isBusy, connected, isPinnedToBottom }: { isBusy: boolean; connected: boolean; isPinnedToBottom: boolean }) {
-  return (
-    <Box height={1} overflow="hidden" flexDirection="row">
-      <Text color="cyan">JustBetter MCP TUI</Text>
-      <Text color="dim"> | </Text>
-      <Text color={connected ? 'green' : 'yellow'}>{connected ? 'Gateway Connected' : 'Connecting...'}</Text>
-      <Text color="dim"> | </Text>
-      <Text color="dim">{isBusy ? 'Processing...' : 'Ready'}</Text>
-      <Text color="dim"> | </Text>
-      <Text color={isPinnedToBottom ? 'green' : 'yellow'}>{isPinnedToBottom ? 'Follow' : 'Scrolled'}</Text>
-      <Text color="dim"> | /help /setup | PgUp/PgDn Ctrl+U/D Home/End Ctrl+X</Text>
-    </Box>
-  );
-}
-
-/**
- * First-run configuration. Runs before the gateway is booted, because starting the
- * LLM proxy against a placeholder key just produces an "invalid API key" error from
- * the provider with no indication of which file to edit.
- */
-export function SetupWizard({ onComplete, onCancel }: {
-  onComplete: (summary: string[]) => void;
-  onCancel?: () => void;
-}) {
-  const configured = String(cliConfig.apiProvider ?? '');
-  const initialProvider: Provider =
-    (PROVIDERS as readonly string[]).includes(configured) ? (configured as Provider) : 'gemini';
-
-  const [step, setStep] = useState<'provider' | 'key' | 'model' | 'workspace'>('provider');
-  const [cursor, setCursor] = useState(Math.max(0, PROVIDERS.indexOf(initialProvider)));
-  const [provider, setProvider] = useState<Provider>(initialProvider);
-  const [keyValue, setKeyValue] = useState('');
-  const [modelValue, setModelValue] = useState('');
-  const [workspaceValue, setWorkspaceValue] = useState('');
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [checking, setChecking] = useState(false);
-
-  // Only offered once there is a working config to fall back to. On a first run there is
-  // nothing to cancel back to, so Esc would just strand the user on an empty screen.
-  useInput((_input, key) => {
-    if (key.escape) onCancel!();
-  }, { isActive: Boolean(onCancel) && !checking });
-
-  useInput((input, key) => {
-    if (key.upArrow) { setCursor(c => (c + PROVIDERS.length - 1) % PROVIDERS.length); return; }
-    if (key.downArrow) { setCursor(c => (c + 1) % PROVIDERS.length); return; }
-    const typed = Number(input);
-    if (typed >= 1 && typed <= PROVIDERS.length) { setCursor(typed - 1); return; }
-    if (key.return) {
-      const chosen = PROVIDERS[cursor] as Provider;
-      const existingKey = cliConfig.llmProxy?.[PROVIDER_KEY_FIELD[chosen]];
-      const keptProvider = chosen === cliConfig.apiProvider;
-      setProvider(chosen);
-      // Carry a real key over so re-running setup is not a retype; skip placeholders.
-      setKeyValue(existingKey && !/^YOUR-/i.test(existingKey) ? existingKey : '');
-      // Only reuse the configured model when the provider is unchanged. Carrying it
-      // across a switch is exactly how a Mistral model name ended up under Gemini.
-      setModelValue((keptProvider && cliConfig.llmProxy?.model) || PROVIDER_DEFAULT_MODEL[chosen]);
-      setStep('key');
-    }
-  }, { isActive: step === 'provider' });
-
-  // Checked against the provider before it is accepted. A key that only fails later, on
-  // the first chat turn, surfaces as an opaque 401 with the setup screen long gone.
-  const submitKey = async (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed || /^YOUR-/i.test(trimmed)) {
-      setError('A real API key is required. Paste one to continue.');
-      return;
-    }
-
-    setError('');
-    setNotice('');
-    setChecking(true);
-    const check = await verifyApiKey(provider, trimmed);
-    setChecking(false);
-
-    if (check.status === 'rejected') {
-      setError(`${check.message} Paste a different key, or press Esc to go back.`);
-      return;
-    }
-    // Being offline must not stop someone configuring the tool, so an unreachable
-    // provider is a warning rather than a refusal.
-    if (check.status === 'unknown') {
-      setNotice(`${check.message} Saving it unverified.`);
-    }
-
-    setKeyValue(trimmed);
-    setStep('model');
-  };
-
-  const submitModel = (value: string) => {
-    setModelValue(value.trim() || PROVIDER_DEFAULT_MODEL[provider]);
-    const existing = currentWorkspace();
-    setWorkspaceValue(existing.join(', '));
-    setError('');
-    setStep('workspace');
-  };
-
-  const submitWorkspace = (value: string) => {
-    const parsed = parseWorkspaceInput(value.trim() || invocationCwd());
-    if ('error' in parsed) {
-      setError(parsed.error);
-      return;
-    }
-
-    const model = modelValue.trim() || PROVIDER_DEFAULT_MODEL[provider];
-    if (!cliConfig.llmProxy) {
-      cliConfig.llmProxy = { enabled: true, port: 4141, host: '127.0.0.1' };
-    }
-    cliConfig.apiProvider = provider;
-    cliConfig.llmProxy[PROVIDER_KEY_FIELD[provider]] = keyValue;
-    cliConfig.llmProxy.model = model;
-    cliConfig.allowedDirectories = parsed.dirs;
-
-    const err = persistConfig();
-    onComplete(err
-      ? [`Could not save config: ${err}`]
-      : [
-          `Provider: ${PROVIDER_LABEL[provider]}`,
-          `Model: ${model}`,
-          `Folders: ${parsed.dirs.join(', ')}`,
-          `Saved to ${configPath}`
-        ]);
-  };
-
-  return (
-    <Box flexDirection="column" paddingX={1}>
-      <Text color="cyan" bold>JustBetter setup</Text>
-      <Text dimColor>{configPath}</Text>
-      <Box height={1} />
-
-      {step === 'provider' ? (
-        <Box flexDirection="column">
-          <Text>Which API provider should power the chat?</Text>
-          <Box height={1} />
-          {PROVIDERS.map((option, index) => (
-            <Text key={option} {...(index === cursor ? { color: 'green' } : {})}>
-              {index === cursor ? '>' : ' '} {index + 1}. {PROVIDER_LABEL[option]}
-            </Text>
-          ))}
-          <Box height={1} />
-          <Text dimColor>Up/Down or a number to choose, Enter to confirm.</Text>
-        </Box>
-      ) : null}
-
-      {step === 'key' ? (
-        <Box flexDirection="column">
-          <Text>Paste your {PROVIDER_LABEL[provider]} API key.</Text>
-          <Text dimColor>Get one at {PROVIDER_KEY_URL[provider]}</Text>
-          <Box height={1} />
-          {checking ? (
-            <Text color="cyan">Checking the key with {PROVIDER_LABEL[provider]}...</Text>
-          ) : (
-            <Box>
-              <Text color="blue" bold>Key {'>'} </Text>
-              <TextInput
-                value={keyValue}
-                onChange={value => { setKeyValue(value); if (error) setError(''); }}
-                onSubmit={value => { void submitKey(value); }}
-                mask="*"
-              />
-            </Box>
-          )}
-          {error ? <Text color="red">{error}</Text> : null}
-        </Box>
-      ) : null}
-
-      {step === 'model' ? (
-        <Box flexDirection="column">
-          <Text>Which model? Enter accepts the default.</Text>
-          <Box height={1} />
-          <Box>
-            <Text color="blue" bold>Model {'>'} </Text>
-            <TextInput value={modelValue} onChange={setModelValue} onSubmit={submitModel} />
-          </Box>
-          {notice ? <Text color="yellow">{notice}</Text> : null}
-        </Box>
-      ) : null}
-
-      {step === 'workspace' ? (
-        <Box flexDirection="column">
-          <Text>Which folder should the agent be allowed to read and write?</Text>
-          <Text dimColor>Separate several with commas. Enter accepts the default.</Text>
-          <Box height={1} />
-          <Box>
-            <Text color="blue" bold>Folder {'>'} </Text>
-            <TextInput
-              value={workspaceValue}
-              onChange={value => { setWorkspaceValue(value); if (error) setError(''); }}
-              onSubmit={submitWorkspace}
-            />
-          </Box>
-          {error ? <Text color="red">{error}</Text> : null}
-        </Box>
-      ) : null}
-
-      {onCancel && !checking ? (
-        <>
-          <Box height={1} />
-          <Text dimColor>Esc to cancel and keep the current settings.</Text>
-        </>
-      ) : null}
-    </Box>
-  );
-}
-
-function App({ mcpClient }: { mcpClient: Client | null }) {
+import {
+  cliConfig, configPath, proxyUrl, persistConfig, reloadConfig, saveConfig,
+  configNeedsSetup, currentWorkspace, parseWorkspaceInput, maskKey,
+  PROVIDER_LABEL, PROVIDER_KEY_FIELD, PROVIDER_DEFAULT_MODEL
+} from './tui/session.js';
+import type { Provider } from './tui/session.js';
+import {
+  INITIAL_LLM_MESSAGES, MAX_TURNS, STARTUP_EVENTS, createId, formatToolArgs
+} from './tui/events.js';
+import type { UiEvent } from './tui/events.js';
+import { renderEventsToLines, renderEventLines, findLatestExpandableEventId } from './tui/render.js';
+import { matchingCommands } from './tui/commands.js';
+import { CommandMenu, InputBox, HintLine, WorkingLine, Lines } from './tui/components.js';
+import { themeFromEnvironment } from './tui/theme.js';
+import { SetupWizard } from './tui/wizard.js';
+
+// Re-exported so tests and any other caller keep importing them from this module.
+export { renderEventsToLines } from './tui/render.js';
+export { matchingCommands } from './tui/commands.js';
+export { SetupWizard } from './tui/wizard.js';
+
+export function App({ mcpClient }: { mcpClient: Client | null }) {
   const [llmMessages, setLlmMessages] = useState<any[]>(INITIAL_LLM_MESSAGES);
   const [events, setEvents] = useState<UiEvent[]>(STARTUP_EVENTS);
   const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(() => new Set());
   const [isBusy, setIsBusy] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [scrollTopLine, setScrollTopLine] = useState(0);
-  const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
+  // How many events have been handed to <Static>. Everything below this index is the
+  // terminal's now: printed once, never redrawn, and scrolled with the mouse wheel like
+  // any other command output. Above it is the live turn, which still re-renders.
+  const [committedCount, setCommittedCount] = useState(0);
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [menuSelection, setMenuSelection] = useState(0);
+  const [interruptedAt, setInterruptedAt] = useState(0);
+  const abortRef = React.useRef<AbortController | null>(null);
+  const exitArmedRef = React.useRef<number>(0);
   const [phase, setPhase] = useState<'setup' | 'chat'>(configNeedsSetup() ? 'setup' : 'chat');
   // A first run has no working config to fall back to, so the wizard is not escapable
   // there. Reached through /setup, it is.
@@ -539,16 +57,21 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
   const [activity, setActivity] = useState<string | null>(null);
   const { stdout } = useStdout();
 
-  const terminalRows = stdout.rows || 24;
   const terminalColumns = stdout.columns || 80;
+  const theme = useMemo(() => themeFromEnvironment(terminalColumns), [terminalColumns]);
   const suggestions = useMemo(() => matchingCommands(draft), [draft]);
-  const transcriptHeight = Math.max(4, terminalRows - 4 - suggestions.length);
-  const transcriptLines = useMemo(
-    () => renderEventsToLines(events, terminalColumns, expandedEventIds, verbose),
-    [events, terminalColumns, expandedEventIds, verbose]
+
+  const committedEvents = events.slice(0, committedCount);
+  const liveEvents = events.slice(committedCount);
+  const liveLines = useMemo(
+    () => renderEventsToLines(liveEvents, terminalColumns, expandedEventIds, verbose, theme, false),
+    [liveEvents, terminalColumns, expandedEventIds, verbose, theme]
   );
-  const maxScrollTop = Math.max(0, transcriptLines.length - transcriptHeight);
-  const visibleLines = transcriptLines.slice(scrollTopLine, scrollTopLine + transcriptHeight);
+
+  // The live region is capped because ink repaints all of it on every state change, and a
+  // tall repainting region under a ticking spinner is exactly what makes a TUI flicker.
+  const LIVE_LINE_CAP = 8;
+  const visibleLiveLines = liveLines.slice(-LIVE_LINE_CAP);
 
   const appendEvent = (event: Omit<UiEvent, 'id'> & { id?: string }) => {
     const nextEvent = { ...event, id: event.id || createId() };
@@ -581,37 +104,59 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
   };
 
   useInput((input, key) => {
-    const pageSize = Math.max(1, transcriptHeight - 1);
-
-    if (key.pageUp || (key.ctrl && input === 'u')) {
-      setIsPinnedToBottom(false);
-      setScrollTopLine(prev => Math.max(0, prev - pageSize));
+    // Esc aborts the turn in flight. The transcript keeps whatever already happened --
+    // an interrupted run that erased its own output would be worse than no interrupt.
+    if (key.escape) {
+      if (isBusy && abortRef.current) {
+        abortRef.current.abort();
+        setInterruptedAt(Date.now());
+      }
       return;
     }
 
-    if (key.pageDown || (key.ctrl && input === 'd')) {
-      setScrollTopLine(prev => {
-        const next = Math.min(maxScrollTop, prev + pageSize);
-        if (next >= maxScrollTop) setIsPinnedToBottom(true);
-        return next;
-      });
+    if (key.ctrl && input === 'c') {
+      // Two presses within two seconds, so a stray Ctrl+C cannot end the session.
+      const now = Date.now();
+      if (now - exitArmedRef.current < 2000) process.exit(0);
+      exitArmedRef.current = now;
+      appendEvent({ type: 'system', text: 'Press Ctrl+C again to exit, or type /exit.' });
       return;
     }
 
-    if (key.home) {
-      setIsPinnedToBottom(false);
-      setScrollTopLine(0);
+    if (suggestions.length > 0) {
+      if (key.upArrow) { setMenuSelection(i => (i + suggestions.length - 1) % suggestions.length); return; }
+      if (key.downArrow) { setMenuSelection(i => (i + 1) % suggestions.length); return; }
+      if (key.tab) {
+        const chosen = suggestions[menuSelection] ?? suggestions[0];
+        if (chosen) setDraft(chosen.name + ' ');
+        return;
+      }
+    }
+
+    // Recalling a previous line only makes sense when there is nothing half-typed to lose.
+    if (draft === '' && key.upArrow && history.length > 0) {
+      const nextIndex = historyIndex === null ? history.length - 1 : Math.max(0, historyIndex - 1);
+      setHistoryIndex(nextIndex);
+      setDraft(history[nextIndex] ?? '');
       return;
     }
 
-    if (key.end) {
-      setIsPinnedToBottom(true);
-      setScrollTopLine(maxScrollTop);
+    if (historyIndex !== null && key.downArrow) {
+      const nextIndex = historyIndex + 1;
+      if (nextIndex >= history.length) {
+        setHistoryIndex(null);
+        setDraft('');
+      } else {
+        setHistoryIndex(nextIndex);
+        setDraft(history[nextIndex] ?? '');
+      }
       return;
     }
 
+    // Expansion applies to the live turn only. Anything already committed to <Static>
+    // belongs to the terminal and cannot be re-rendered; /verbose is the lever for that.
     if (key.ctrl && input === 'x') {
-      const latestExpandable = findLatestExpandableEventId(events);
+      const latestExpandable = findLatestExpandableEventId(liveEvents);
       if (!latestExpandable) return;
       setExpandedEventIds(prev => {
         const next = new Set(prev);
@@ -626,20 +171,33 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
     setIsConnected(Boolean(mcpClient));
   }, [mcpClient]);
 
+  // Menu selection must not point past the end when the filter narrows.
   useEffect(() => {
-    if (isPinnedToBottom) {
-      setScrollTopLine(maxScrollTop);
-    } else {
-      setScrollTopLine(prev => Math.min(prev, maxScrollTop));
-    }
-  }, [maxScrollTop, isPinnedToBottom]);
+    setMenuSelection(selection => (selection < suggestions.length ? selection : 0));
+  }, [suggestions.length]);
 
-  const runAgenticLoop = async (initialHistory: any[], turnId: string) => {
+  /**
+   * Hands everything from the finished turn to <Static>.
+   *
+   * Commits only while idle, and only whole turns. Committing an event as it arrived would
+   * print a tool result before the call it belongs to whenever a slow result landed after
+   * the next event, and nothing printed can be reordered afterwards.
+   */
+  useEffect(() => {
+    if (isBusy) return;
+    setCommittedCount(count => (events.length > count ? events.length : count));
+  }, [isBusy, events.length]);
+
+  const runAgenticLoop = async (initialHistory: any[], turnId: string, signal?: AbortSignal) => {
     let history = [...initialHistory];
     let turns = 0;
     let requestToolsMisses = 0;
 
     while (mcpClient) {
+      if (signal?.aborted) {
+        appendEvent({ turnId, type: 'system', text: 'Interrupted.' });
+        break;
+      }
       if (turns >= MAX_TURNS) {
         appendEvent({ turnId, type: 'system', text: `System: reached the maximum of ${MAX_TURNS} tool turns.` });
         break;
@@ -664,7 +222,10 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           body: JSON.stringify({
             model: cliConfig.llmProxy?.model || 'mistral-large-latest',
             messages: prunedHistory
-          })
+          }),
+          // Without this, Esc during a slow model call would only take effect once the
+          // response had already arrived, which does not read as an interrupt.
+          ...(signal ? { signal } : {})
         });
 
         if (!response.ok) {
@@ -724,6 +285,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         }
 
         for (const toolCall of toolCalls) {
+          if (signal?.aborted) break;
           const name = toolCall.function?.name || toolCall.name;
           const rawArgs = toolCall.function?.arguments ?? toolCall.arguments ?? '{}';
 
@@ -822,6 +384,11 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           setLlmMessages(history);
         }
       } catch (e: any) {
+        // AbortError is the user pressing Esc, which has already been reported.
+        if (e?.name === 'AbortError' || signal?.aborted) {
+          appendEvent({ turnId, type: 'system', text: 'Interrupted.' });
+          break;
+        }
         appendEvent({ turnId, type: 'system', text: `Execution error: ${e.message}` });
         break;
       }
@@ -859,7 +426,10 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
           `  /help       this list`,
           `  /exit       quit`,
           ``,
-          `Keys: PgUp/PgDn or Ctrl+U/Ctrl+D to scroll, Home/End, Ctrl+X to expand output.`,
+          ``,
+          `Keys: Esc interrupts a running turn. Up/Down recalls what you typed.`,
+          `      Ctrl+X expands the current tool output. Ctrl+C twice exits.`,
+          `      Scroll with the mouse wheel -- finished output is ordinary terminal scrollback.`,
         ];
         for (const line of lines) appendEvent({ type: 'system', text: line });
         return;
@@ -869,8 +439,9 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
         setLlmMessages(INITIAL_LLM_MESSAGES);
         setEvents([]);
         setExpandedEventIds(new Set());
-        setScrollTopLine(0);
-        setIsPinnedToBottom(true);
+        // Nothing already printed can be unprinted -- it is the terminal's scrollback now.
+        // Clearing resets the model's history and the live region, which is what /clear is for.
+        setCommittedCount(0);
         return;
       }
 
@@ -969,7 +540,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
 
       if (text === '/config save') {
         try {
-          fs.writeFileSync(configPath, JSON.stringify(cliConfig, null, 2), 'utf-8');
+          saveConfig();
           appendEvent({ type: 'system', text: `Config saved to ${configPath}` });
         } catch (e: any) {
           appendEvent({ type: 'system', text: `Error saving config: ${e.message}` });
@@ -979,7 +550,7 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
 
       if (text === '/config reload') {
         try {
-          cliConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+          reloadConfig();
           appendEvent({ type: 'system', text: `Config reloaded from ${configPath}` });
         } catch (e: any) {
           appendEvent({ type: 'system', text: `Error reloading config: ${e.message}` });
@@ -994,47 +565,70 @@ function App({ mcpClient }: { mcpClient: Client | null }) {
     const userMessage = { role: 'user', content: text };
     const nextHistory = [...llmMessages, userMessage];
 
+    setHistory(prev => (prev[prev.length - 1] === text ? prev : [...prev, text]));
+    setHistoryIndex(null);
     setIsBusy(true);
-    setIsPinnedToBottom(true);
+    setInterruptedAt(0);
+    const controller = new AbortController();
+    abortRef.current = controller;
     appendEvent({ turnId, type: 'user', text });
     setLlmMessages(nextHistory);
 
-    await runAgenticLoop(nextHistory, turnId);
+    await runAgenticLoop(nextHistory, turnId, controller.signal);
+    abortRef.current = null;
     setActivity(null);
     setIsBusy(false);
   };
 
-  if (phase === 'setup') {
-    return <SetupWizard onComplete={finishSetup} {...(setupIsOptional ? { onCancel: cancelSetup } : {})} />;
-  }
+  const provider = cliConfig.apiProvider || 'gemini';
+  const model = cliConfig.llmProxy?.model || '(no model)';
+  const hints = [
+    model,
+    isConnected ? 'gateway ready' : 'connecting…',
+    '/ for commands',
+    verbose ? 'verbose on' : 'ctrl+x expand',
+    'ctrl+c twice to exit'
+  ];
 
   return (
     <Box flexDirection="column">
-      <Box height={transcriptHeight} overflow="hidden" flexDirection="column" justifyContent="flex-end">
-        {visibleLines.map((line, index) => (
-          <Text
-            key={`${scrollTopLine}-${index}`}
-            {...(line.color !== undefined ? { color: line.color } : {})}
-            {...(line.bold !== undefined ? { bold: line.bold } : {})}
-            {...(line.dimColor !== undefined ? { dimColor: line.dimColor } : {})}
-            wrap="truncate-end"
-          >
-            {line.text}
-          </Text>
-        ))}
-      </Box>
+      {/*
+        Committed history. Ink prints each item once and then forgets it, so the lines
+        become ordinary terminal output: the mouse wheel scrolls them, the terminal keeps
+        the scrollback, and text can be selected and copied. Keyed on the event id -- an
+        index key would reprint the whole transcript whenever the array shifted.
+      */}
+      <Static items={committedEvents}>
+        {(event: UiEvent) => (
+          <Box key={event.id} flexDirection="column">
+            <Lines lines={renderEventLines(event, terminalColumns, expandedEventIds.has(event.id), verbose, theme)} />
+          </Box>
+        )}
+      </Static>
 
-      <CommandMenu suggestions={suggestions} />
+      {/*
+        The wizard is a state of the live region, never a replacement for the whole tree.
+        Returning <SetupWizard /> instead unmounted <Static>, and ink re-prints every Static
+        item when it remounts -- so leaving setup duplicated the entire transcript.
+      */}
+      {phase === 'setup' ? (
+        <SetupWizard onComplete={finishSetup} {...(setupIsOptional ? { onCancel: cancelSetup } : {})} />
+      ) : (
+        <>
+          {visibleLiveLines.length > 0 ? (
+            <Box flexDirection="column">
+              <Lines lines={visibleLiveLines} />
+            </Box>
+          ) : null}
 
-      <Box height={1} overflow="hidden">
-        {isBusy
-          ? <Text color="cyan">Thinking{activity ? ` — ${activity}` : ''}...</Text>
-          : <InputBar value={draft} onChange={setDraft} onSubmit={handleSubmit} />}
-      </Box>
-      <StatusBar isBusy={isBusy} connected={isConnected} isPinnedToBottom={isPinnedToBottom} />
-      <Box height={1} overflow="hidden">
-        <Text color="dim">Lines {Math.min(scrollTopLine + 1, transcriptLines.length)}-{Math.min(scrollTopLine + transcriptHeight, transcriptLines.length)}/{transcriptLines.length}</Text>
-      </Box>
+          {isBusy
+            ? <WorkingLine theme={theme} activity={activity} interrupting={interruptedAt > 0} />
+            : <InputBox theme={theme} value={draft} onChange={setDraft} onSubmit={handleSubmit} />}
+
+          <CommandMenu theme={theme} suggestions={suggestions} selected={menuSelection} />
+          <HintLine theme={theme} items={hints} />
+        </>
+      )}
     </Box>
   );
 }
@@ -1081,7 +675,20 @@ export async function bootGateway(): Promise<string | null> {
 }
 
 async function start() {
-  const { waitUntilExit, rerender } = render(<App mcpClient={gatewayClient} />, { alternateScreen: true });
+  // NOT the alternate screen. That buffer has no scrollback by definition, so committing the
+  // transcript to <Static> there produced output nobody could scroll back to -- the mouse
+  // wheel did nothing. Rendering in the normal buffer is what makes finished turns behave
+  // like ordinary command output: wheel-scrollable, selectable, copyable.
+  //
+  // Scroll the prompt to the bottom of the screen first. Ink keeps its live region wherever
+  // the cursor started and writes committed output above it, so without this the prompt
+  // opens near the top and creeps downward as the transcript grows. One screen of newlines
+  // puts it on the last row immediately, and from then on the terminal scrolls the
+  // transcript up behind it and the prompt stays put.
+  const rows = process.stdout.rows || 24;
+  process.stdout.write(String.fromCharCode(10).repeat(Math.max(0, rows - 1)));
+
+  const { waitUntilExit, rerender } = render(<App mcpClient={gatewayClient} />);
   rerenderApp = () => rerender(<App mcpClient={gatewayClient} />);
 
   // A config that cannot chat yet goes to the wizard first. Booting now would start

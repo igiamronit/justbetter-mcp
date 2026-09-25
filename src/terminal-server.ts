@@ -3,8 +3,40 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { exec } from "child_process";
 import util from "util";
+import fs from "fs";
+import path from "path";
 
 const execAsync = util.promisify(exec);
+
+/**
+ * Where commands run.
+ *
+ * The gateway spawns its upstreams from a temp directory on purpose -- a process sitting in
+ * the install folder is what makes `npm install -g` fail with EBUSY on Windows. This server
+ * takes no path argument, so it inherited that temp directory and every command ran there:
+ * `npm test` looked for %TEMP%\package.json and failed with ENOENT.
+ *
+ * Resolution order: the first path argument, then JUSTBETTER_WORKSPACE (published by the
+ * gateway for exactly this), then this process's own directory. A configured path that does
+ * not exist is ignored rather than passed to exec, which would fail every command with a
+ * message about the directory instead of the command.
+ */
+function resolveWorkingDirectory(): string {
+  const candidates = [process.argv[2], process.env.JUSTBETTER_WORKSPACE];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const resolved = path.resolve(candidate);
+    try {
+      if (fs.statSync(resolved).isDirectory()) return resolved;
+    } catch {
+      /* not a usable directory; try the next candidate */
+    }
+    console.error(`[terminal] Ignoring working directory that does not exist: ${resolved}`);
+  }
+  return process.cwd();
+}
+
+const WORKING_DIRECTORY = resolveWorkingDirectory();
 
 /** Commands are killed after this long so a hung process cannot wedge the server. */
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
@@ -16,7 +48,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "run_terminal_command",
-        description: "Execute a command in the host terminal (Powershell/Cmd/Bash) and get the standard output and error.",
+        description: `Execute a command in the host terminal (Powershell/Cmd/Bash) and get the standard output and error. Commands run in ${WORKING_DIRECTORY}, so relative paths resolve there.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -41,6 +73,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
     
     try {
       const { stdout, stderr } = await execAsync(cmd, {
+        cwd: WORKING_DIRECTORY,
         maxBuffer: 1024 * 1024 * 10, // 10MB buffer to prevent crash on large outputs
         // A command that never returns would otherwise hold this server open forever.
         timeout: COMMAND_TIMEOUT_MS
@@ -71,6 +104,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
 async function run() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  console.error(`[terminal] Commands run in: ${WORKING_DIRECTORY}`);
 }
 
 run().catch(console.error);

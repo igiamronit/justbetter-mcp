@@ -18,7 +18,8 @@
       "command": "${JUSTBETTER_NODE}",
       "args": [
         "${JUSTBETTER_TSX}",
-        "src/terminal-server.ts"
+        "src/terminal-server.ts",
+        "${JUSTBETTER_WORKSPACE}"
       ]
     },
     {

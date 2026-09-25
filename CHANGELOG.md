@@ -5,6 +5,80 @@ All notable changes to this project are documented here.
 This project uses [Semantic Versioning](https://semver.org/). While on `0.x`, the config
 format and CLI surface may change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+
+- **Terminal commands ran in the temp directory, not your project.** Upstreams are spawned
+  with `cwd: os.tmpdir()` on purpose — a process sitting in the install folder is what makes
+  `npm install -g` fail with EBUSY on Windows — and the terminal server took no path
+  argument, so it inherited that. `npm test` looked for `%TEMP%\package.json` and failed
+  with `ENOENT`. The gateway now publishes `JUSTBETTER_WORKSPACE` to every upstream, the
+  shipped config passes `${JUSTBETTER_WORKSPACE}` to the terminal server, and the server
+  reports the directory it will use at startup. Existing configs are fixed by the
+  environment variable without any edit.
+- **The prompt drifted down the screen.** Ink keeps its live region where the cursor
+  started, so the prompt opened near the top and crept downward as the transcript grew. The
+  screen is now scrolled once at launch, which puts the prompt on the last row and keeps it
+  there while the transcript scrolls up behind it.
+- **The TUI could not be scrolled.** It rendered into the alternate screen buffer, which has
+  no scrollback by definition, so committing the transcript to `Static` produced output the
+  mouse wheel could not reach. It now renders in the normal buffer, where finished turns are
+  ordinary terminal scrollback — wheel-scrollable, selectable and copyable.
+- **Leaving the setup wizard re-printed the whole transcript.** The wizard was returned in
+  place of the entire component tree, which unmounted `Static` — and ink re-prints every
+  `Static` item when it remounts. The wizard is now a state of the live region, so the
+  committed transcript stays mounted across `/setup`.
+- **A dashboard port clash killed the whole gateway.** `ws` forwards the HTTP server's own
+  `error` event onto the `WebSocketServer` as well, so handling it only on the server left
+  an unhandled duplicate — and an unhandled `'error'` event throws. Starting a second
+  instance, or starting one after a previous process had not yet released the port, died
+  with `EADDRINUSE` on 4040 instead of just running without a dashboard.
+
+### Changed
+
+- **The TUI was rebuilt to read like a modern coding agent.** The transcript is now
+  committed to the terminal with ink's `Static` instead of being repainted inside a
+  fixed-height viewport, so finished output is ordinary scrollback: the mouse wheel works,
+  and text can be selected and copied. Only the live turn and the prompt redraw.
+  - One marker vocabulary replaces the old text labels: a filled circle opens an assistant
+    message or a tool call, a corner glyph hangs its result, and a cross marks a failure.
+  - Tool calls collapse to one line with the argument that identifies them —
+    `read_text_file(hello.py)` rather than a pretty-printed JSON block.
+  - A failure now names its tool. In quiet mode the call line above it is hidden, so
+    `Failed` on its own gave nothing to act on.
+  - Colour is cut from six ad-hoc colours to four roles. Conversation text is left
+    unstyled so it stands out from uniformly dimmed machinery.
+  - The prompt sits in a rounded border, with one dim hint line under it that sheds items
+    as the terminal narrows instead of being cut off mid-word.
+  - `NO_COLOR` is honoured, and `JUSTBETTER_ASCII=1` forces single-column fallback glyphs
+    for terminals that render box-drawing characters as replacement boxes.
+
+### Added
+
+- **An ASCII wordmark at launch**, drawn from a small built-in half-block font rather than a
+  figlet dependency, with a `#` fallback for terminals that cannot draw half blocks and a
+  plain one-line title when the terminal is too narrow for it.
+- **`Esc` interrupts a running turn.** The request is cancelled through an `AbortSignal`,
+  so it takes effect during a slow model call rather than after it. Whatever already
+  happened stays in the transcript.
+- **A working line** while a turn runs: spinner, the tool in flight, elapsed seconds, and
+  the interrupt hint, in place of the old `Thinking...` text.
+- **Command history** on Up/Down when the input is empty, and **arrow-key selection** in
+  the slash menu with Tab to accept.
+- **`Ctrl+C` twice to exit**, prompting after the first press.
+- `src/tui.tsx` was split into `src/tui/` — `theme`, `render`, `components`, `commands`,
+  `events`, `session` and `wizard` — with the wizard and the agentic loop moved unchanged.
+  The exports the tests import are re-exported from `src/tui.tsx`.
+
+### Removed
+
+- **Retroactive expansion of old tool output.** `Ctrl+X` now expands the current turn only.
+  Committed lines belong to the terminal and cannot be re-rendered; `/verbose` is the
+  session-wide lever, and in exchange scrolling is the terminal's own.
+- In-app scrolling keys (`PgUp`/`PgDn`, `Ctrl+U`/`Ctrl+D`, `Home`/`End`) and the
+  `Lines 40-64/210` counter, both made redundant by native scrollback.
+
 ## [0.3.0] — 2026-09-25
 
 ### Added

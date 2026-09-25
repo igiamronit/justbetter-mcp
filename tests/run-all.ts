@@ -54,6 +54,17 @@ async function expectRejects(fn: () => unknown | Promise<unknown>) {
   assert.equal(rejected, true, 'Expected function to throw/reject');
 }
 
+// Glyphs and key sequences as code points, so no editor or patch can mangle an escape.
+const BULLET = String.fromCharCode(0x23fa);
+const BRANCH = String.fromCharCode(0x23bf);
+const FAIL = String.fromCharCode(0x2717);
+const BOX_TOP_LEFT = String.fromCharCode(0x256d);
+const ESC = String.fromCharCode(27);
+const SYNC_START = ESC + '[?2026h';
+const ARROW_UP = ESC + '[A';
+const ARROW_DOWN = ESC + '[B';
+const ENTER_KEY = String.fromCharCode(13);
+
 const tests: TestCase[] = [
   {
     name: 'config: loads defaults, core pinned tools, and LLM_PORT override',
@@ -460,12 +471,23 @@ const tests: TestCase[] = [
       const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
       const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
 
+      // A project directory with a package.json, which is what `npm test` needs to find.
+      const projectDir = path.join(tempRoot, 'terminal-workspace');
+      mkdirSync(projectDir, { recursive: true });
+      writeJson(path.join(projectDir, 'package.json'), { name: 'probe', version: '1.0.0' });
+
       const transport = new StdioClientTransport({
         command: process.execPath,
         args: [
           path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-          path.join(repoRoot, 'src', 'terminal-server.ts')
+          path.join(repoRoot, 'src', 'terminal-server.ts'),
+          projectDir
         ],
+        // The gateway spawns its upstreams from a temp directory, because a process sitting
+        // in the install folder makes `npm install -g` fail with EBUSY on Windows. This
+        // server took no path argument, so it inherited that and every command ran in
+        // %TEMP%: `npm test` failed on a missing package.json.
+        cwd: os.tmpdir(),
         env: process.env as Record<string, string>
       });
       const client = new Client({ name: 'terminal-test', version: '1.0.0' }, { capabilities: {} });
@@ -486,6 +508,20 @@ const tests: TestCase[] = [
         const text = (result.content as any[])?.map(part => part.text).join('\n') || '';
         assert.equal(result.isError, undefined);
         assert.match(text, /terminal-ok/);
+
+        // Commands must run in the named workspace, not wherever the server was spawned.
+        const cwdResult = await client.callTool({
+          name: 'run_terminal_command',
+          arguments: { command: `${quotedNode} -e "console.log(process.cwd())"` }
+        });
+        const cwdText = ((cwdResult.content as any[])?.map(part => part.text).join(' ') || '').trim();
+        assert.equal(path.resolve(cwdText).toLowerCase(), path.resolve(projectDir).toLowerCase(),
+          `commands must run in the workspace, ran in ${cwdText}`);
+
+        // JUSTBETTER_WORKSPACE is the fallback for configs passing no path argument, and is
+        // what the gateway now publishes to every upstream.
+        const { workspaceDirs } = await import(srcModule('src/upstream.ts'));
+        assert.deepEqual(workspaceDirs([projectDir]), [path.resolve(projectDir)]);
       } finally {
         await client.close().catch(() => undefined);
       }
@@ -732,13 +768,13 @@ const tests: TestCase[] = [
         assert.ok(quiet.includes('list my files'), 'the user turn must survive');
         assert.ok(quiet.includes('Here are your files.'), 'the answer must survive');
         assert.ok(!quiet.includes('Auto-injected'), 'the injection trace is machinery');
-        assert.ok(!quiet.includes('Tool request'), 'tool calls are hidden by default');
+        assert.ok(!quiet.includes('list_directory('), 'tool calls are hidden by default');
         assert.ok(!quiet.includes('list_directory'), 'successful tool traffic is hidden by default');
         assert.ok(quiet.includes('read_text_file'), 'a FAILED tool must still be shown');
 
         const loud = renderEventsToLines(events, 100, new Set(), true).map((line: any) => line.text).join('\n');
         assert.ok(loud.includes('Auto-injected'), 'verbose restores the injection trace');
-        assert.ok(loud.includes('Tool request > list_directory'), 'verbose restores tool calls');
+        assert.ok(loud.includes('list_directory(.)'), 'verbose restores tool calls, with the argument that identifies them');
         assert.ok(loud.includes('read_text_file'), 'verbose still shows failures');
 
         // Typing "/" alone offers everything; typing more narrows it down.
@@ -751,6 +787,362 @@ const tests: TestCase[] = [
 
         assert.deepEqual(matchingCommands('hello'), [], 'ordinary text must not open the menu');
         assert.deepEqual(matchingCommands('/zzz'), [], 'an unknown command matches nothing');
+      } finally {
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'tui theme: degrades to single-byte glyphs and drops colour on request',
+    async fn() {
+      const { resolveTheme, themeFromEnvironment, style, isNarrow, NARROW_COLUMNS } =
+        await import(srcModule('src/tui/theme.ts'));
+
+      const rich = resolveTheme({ columns: 100 });
+      assert.equal(rich.color, true);
+      assert.equal(rich.unicode, true);
+      assert.deepEqual(style(rich, 'accent'), { color: 'cyan' });
+      assert.deepEqual(style(rich, 'failure'), { color: 'red' });
+      // Conversation text is deliberately unstyled so it stands out from dimmed machinery.
+      assert.deepEqual(style(rich, 'conversation'), {});
+
+      const plain = resolveTheme({ columns: 100, noColor: true, ascii: true });
+      assert.equal(plain.color, false);
+      assert.equal(plain.unicode, false);
+      // Without colour, bold is the only way left to mark a failure.
+      assert.deepEqual(style(plain, 'failure'), { bold: true });
+      assert.deepEqual(style(plain, 'accent'), {});
+
+      // Every fallback glyph must be one column wide, or wrapping shifts with the mode.
+      for (const [name, glyph] of Object.entries(plain.glyph)) {
+        assert.equal(String(glyph).length, 1, name + ' fallback must be one column, got ' + glyph);
+      }
+
+      // NO_COLOR is honoured by presence, per the convention.
+      assert.equal(themeFromEnvironment(80, { NO_COLOR: '1' }).color, false);
+      assert.equal(themeFromEnvironment(80, { NO_COLOR: '' }).color, true);
+      assert.equal(themeFromEnvironment(80, {}).color, true);
+      assert.equal(themeFromEnvironment(80, { JUSTBETTER_ASCII: '1' }).unicode, false);
+
+      assert.equal(isNarrow(resolveTheme({ columns: NARROW_COLUMNS - 1 })), true);
+      assert.equal(isNarrow(resolveTheme({ columns: NARROW_COLUMNS })), false);
+    }
+  },
+  {
+    name: 'tui render: marker vocabulary, argument summaries, and a failure always names its tool',
+    async fn() {
+      const { renderEventsToLines, renderEventLines, summariseArgs } =
+        await import(srcModule('src/tui/render.ts'));
+      const { resolveTheme } = await import(srcModule('src/tui/theme.ts'));
+      const theme = resolveTheme({ columns: 78 });
+
+      // A pretty-printed JSON blob per call is what made the old transcript unreadable.
+      assert.equal(summariseArgs('{"path":"hello.py"}', 40), 'hello.py');
+      assert.equal(summariseArgs('{"command":"python hello.py"}', 40), 'python hello.py');
+      assert.equal(summariseArgs('{"limit":5}', 40), 'limit');
+      assert.equal(summariseArgs(undefined, 40), '');
+      assert.equal(summariseArgs('not json at all', 40), 'not json at all');
+
+      const events: any[] = [
+        { id: '1', type: 'user', text: 'run it' },
+        { id: '2', type: 'tool_request', name: 'run_terminal_command', argsText: '{"command":"python hello.py"}' },
+        { id: '3', type: 'tool_result', name: 'run_terminal_command', content: 'hi', summary: '1 line' },
+        { id: '4', type: 'tool_result', name: 'write_file', content: 'EACCES', isError: true, summary: 'Failed' },
+        { id: '5', type: 'assistant', text: 'Done.' }
+      ];
+
+      const loud = renderEventsToLines(events, 78, new Set(), true, theme).map((l: any) => l.text).join('\n');
+      assert.ok(loud.includes('run_terminal_command(python hello.py)'), loud);
+      assert.ok(loud.includes(BRANCH + ' 1 line'), loud);
+      assert.ok(loud.includes(BULLET + ' Done.'), loud);
+
+      // In quiet mode the call line above a failure is hidden, so the failure line itself
+      // has to say which tool broke or there is nothing to act on.
+      const quiet = renderEventsToLines(events, 78, new Set(), false, theme).map((l: any) => l.text).join('\n');
+      assert.ok(quiet.includes(FAIL + ' write_file'), 'a failure must name its tool: ' + quiet);
+      assert.ok(!quiet.includes('run_terminal_command'), 'successful tool traffic stays hidden');
+
+      // renderEventLines is what Static commits, one event at a time. It must not emit the
+      // "type a message" placeholder, or every hidden event would print it.
+      assert.deepEqual(renderEventLines(events[1], 78, false, false, theme), []);
+      assert.ok(renderEventLines(events[4], 78, false, false, theme).length > 0);
+
+      const ascii = renderEventsToLines(events, 78, new Set(), true, resolveTheme({ columns: 78, ascii: true }))
+        .map((l: any) => l.text).join('\n');
+      assert.ok(ascii.includes('* run_terminal_command'), ascii);
+      assert.ok(!ascii.includes(BULLET) && !ascii.includes(BRANCH) && !ascii.includes(FAIL),
+        'the ascii theme must emit no box-drawing glyphs');
+    }
+  },
+  {
+    name: 'tui app: bordered input, slash-menu selection, command history, and no double-printing',
+    async fn() {
+      const savedArgv = process.argv;
+      const appConfig = tempFile('app-config.json');
+      writeJson(appConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', appConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 92;
+        stdout.rows = 30;
+        let frameBuffer = '';
+        // Everything ever written, so a transcript printed twice is detectable. Static
+        // re-printing its items is the classic ink bug and is invisible in a single frame.
+        let allOutput = '';
+        stdout.write = (chunk: any) => {
+          const text = String(chunk);
+          if (text.includes(SYNC_START)) frameBuffer = '';
+          frameBuffer += text;
+          allOutput += text;
+          return true;
+        };
+
+        const strip = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        // One write per key: ink reads a multi-character chunk as a paste.
+        const press = async (sequence: string) => { stdin.write(sequence); await wait(70); };
+
+        const app = render(React.createElement(App, { mcpClient: null }), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+
+        try {
+          await wait(250);
+          assert.ok(strip(frameBuffer).includes(BOX_TOP_LEFT), 'the input must sit inside a border');
+          // The model name comes from whichever config was loaded at first import of
+          // session.ts, which is test-order dependent, so the stable items are asserted.
+          assert.ok(strip(frameBuffer).includes('/ for commands'), 'the hint line offers the command menu');
+          assert.ok(strip(frameBuffer).includes('ctrl+c twice to exit'), 'the hint line says how to leave');
+
+          // Typing "/" opens the menu with the first row marked.
+          await press('/');
+          await wait(150);
+          let frame = strip(frameBuffer);
+          assert.ok(frame.includes('/help'), frame);
+          assert.match(frame, />\s+\/help/, 'the first suggestion must be selected');
+
+          // Arrow keys move the selection rather than scrolling anything.
+          await press(ARROW_DOWN);
+          await wait(150);
+          frame = strip(frameBuffer);
+          assert.match(frame, />\s+\/setup/, 'down must move the selection');
+
+          // Submit a command, then recall it from history with Up on an empty line.
+          for (const character of 'help') await press(character);
+          await press(ENTER_KEY);
+          await wait(300);
+          assert.ok(strip(frameBuffer).includes('Commands'), 'the /help output must reach the transcript');
+
+          await press(ARROW_UP);
+          await wait(150);
+          assert.ok(strip(frameBuffer).includes('/help'), 'up must recall the last submission');
+
+          // Committed output must not be re-printed. Ink re-prints a Static item whenever
+          // its key changes, which silently duplicates the whole conversation -- and it is
+          // invisible in any single frame. Counting a phrase that appears only in the /help
+          // output (not in the menu descriptions, which legitimately repaint) and then
+          // forcing several repaints isolates a Static re-print from ordinary redrawing.
+          const countHelp = () => strip(allOutput).split('this list').length - 1;
+          const afterCommit = countHelp();
+          assert.ok(afterCommit >= 1, 'the /help output should have been printed once');
+          for (const character of 'abcde') await press(character);
+          await wait(200);
+          assert.equal(countHelp(), afterCommit,
+            'repainting the live region re-printed committed output: ' + afterCommit + ' -> ' + countHelp());
+        } finally {
+          app.unmount();
+          await wait(60);
+        }
+      } finally {
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'tui app: Esc interrupts a running turn and keeps what already happened',
+    async fn() {
+      const savedArgv = process.argv;
+      const savedFetch = globalThis.fetch;
+      const abortConfig = tempFile('abort-config.json');
+      writeJson(abortConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', abortConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        // A model call that never answers on its own, so the only way the turn ends is the
+        // abort signal. Rejecting with AbortError is what a real fetch does when cancelled.
+        let sawSignal = false;
+        globalThis.fetch = ((_url: any, init: any) => {
+          const signal: AbortSignal | undefined = init?.signal;
+          sawSignal = Boolean(signal);
+          return new Promise((_resolve, reject) => {
+            if (!signal) return;
+            signal.addEventListener('abort', () => {
+              const error: any = new Error('The operation was aborted');
+              error.name = 'AbortError';
+              reject(error);
+            });
+          });
+        }) as any;
+
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 92;
+        stdout.rows = 30;
+        let frameBuffer = '';
+        stdout.write = (chunk: any) => {
+          const text = String(chunk);
+          if (text.includes(SYNC_START)) frameBuffer = '';
+          frameBuffer += text;
+          return true;
+        };
+
+        const strip = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        const press = async (sequence: string) => { stdin.write(sequence); await wait(70); };
+
+        // The loop only runs with a client attached; it never gets as far as calling it.
+        const fakeClient: any = { callTool: async () => ({ content: [] }) };
+        const app = render(React.createElement(App, { mcpClient: fakeClient }), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+
+        try {
+          await wait(250);
+          for (const character of 'hi') await press(character);
+          await press(ENTER_KEY);
+          await wait(300);
+
+          // While busy the input is replaced by the working line, which says how to stop.
+          const busy = strip(frameBuffer);
+          assert.ok(busy.includes('esc to interrupt'), 'the working line must offer the interrupt: ' + busy);
+          assert.ok(!busy.includes(BOX_TOP_LEFT), 'the input box is replaced while a turn runs');
+          assert.equal(sawSignal, true, 'the model request must carry an abort signal');
+
+          await press(ESC);
+          await wait(400);
+
+          const after = strip(frameBuffer);
+          assert.ok(after.includes('Interrupted'), 'the transcript must record the interrupt: ' + after);
+          // The turn ended, so the prompt comes back.
+          assert.ok(after.includes(BOX_TOP_LEFT), 'the input box must return after an interrupt');
+          // What the user typed is still there; an interrupt that erased history would be worse.
+          assert.ok(after.includes('hi'), 'the submitted message must survive the interrupt');
+        } finally {
+          app.unmount();
+          await wait(60);
+        }
+      } finally {
+        globalThis.fetch = savedFetch;
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'tui app: entering and leaving the wizard does not re-print the transcript',
+    async fn() {
+      const savedArgv = process.argv;
+      const wizardConfig = tempFile('wizard-static-config.json');
+      writeJson(wizardConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', wizardConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 90;
+        stdout.rows = 30;
+        let allOutput = '';
+        stdout.write = (chunk: any) => { allOutput += String(chunk); return true; };
+
+        const strip = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        const press = async (sequence: string) => { stdin.write(sequence); await wait(50); };
+        const countHelp = () => strip(allOutput).split('this list').length - 1;
+
+        const app = render(React.createElement(App, { mcpClient: null }), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+
+        try {
+          await wait(250);
+          for (const character of '/help') await press(character);
+          await press(ENTER_KEY);
+          await wait(350);
+          const beforeWizard = countHelp();
+          assert.ok(beforeWizard >= 1, 'the /help output should have been printed');
+
+          // Returning <SetupWizard /> in place of the whole tree unmounted <Static>, and ink
+          // re-prints every Static item when it remounts -- so leaving setup duplicated the
+          // entire transcript. The wizard must be a state of the live region instead.
+          for (const character of '/setup') await press(character);
+          await press(ENTER_KEY);
+          await wait(350);
+          assert.ok(strip(allOutput).includes('JustBetter setup'), 'the wizard must be reachable');
+
+          await press(ESC);
+          await wait(400);
+          assert.equal(countHelp(), beforeWizard,
+            'the transcript was re-printed on return from the wizard: '
+            + beforeWizard + ' -> ' + countHelp());
+        } finally {
+          app.unmount();
+          await wait(60);
+        }
       } finally {
         process.argv = savedArgv;
         delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
@@ -1019,6 +1411,48 @@ const tests: TestCase[] = [
       assert.equal(resolved?.MEMORY_FILE_PATH, `${dir}/memory.json`);
       assert.ok(!resolved?.MEMORY_FILE_PATH.includes('${'),
         'an unexpanded placeholder would make the memory server look uncredentialed and be skipped');
+    }
+  },
+  {
+    name: 'dashboard: a port clash disables the dashboard instead of killing the gateway',
+    async fn() {
+      const { createServer } = await import('node:http');
+      const { startDashboard } = await import(srcModule('src/dashboard/server.ts'));
+
+      // Take a port the way a leftover gateway would, then ask the dashboard for it.
+      const squatter = createServer(() => {});
+      await new Promise<void>(resolve => squatter.listen(0, '127.0.0.1', () => resolve()));
+      const taken = (squatter.address() as any).port as number;
+
+      // ws forwards the HTTP server's 'error' event onto the WebSocketServer as well, so
+      // handling it only on the server left an unhandled duplicate -- and an unhandled
+      // 'error' event throws. A dashboard port clash took the whole gateway down with
+      // EADDRINUSE. An unhandled rejection or throw here fails the test.
+      const configPath = tempFile('dashboard-clash.json');
+      writeJson(configPath, {
+        upstreamServers: [],
+        dashboard: { enabled: true, port: taken, host: '127.0.0.1' },
+        llmProxy: { enabled: false }
+      });
+
+      const config: any = {
+        upstreamServers: [],
+        dashboard: { enabled: true, port: taken, host: '127.0.0.1' },
+        llmProxy: { enabled: false },
+        pinnedTools: [],
+        destructiveTools: []
+      };
+
+      const server = startDashboard(configPath, config);
+      // Long enough for listen() to fail and the error to propagate to both emitters.
+      await new Promise(resolve => setTimeout(resolve, 400));
+
+      assert.ok(server, 'startDashboard must still return its server object');
+      // Still ours, still listening: the clash did not take the other process down either.
+      assert.equal(squatter.listening, true);
+
+      try { server.close(); } catch { /* never bound */ }
+      await new Promise<void>(resolve => squatter.close(() => resolve()));
     }
   },
   {

@@ -176,6 +176,14 @@ export function startDashboard(configPath: string, bootConfig?: Config) {
   // Start WebSocket Server
   wss = new WebSocketServer({ server });
 
+  // ws forwards the HTTP server's own 'error' event onto the WebSocketServer (see
+  // addListeners in ws/lib/websocket-server.js). Handling it only on `server` therefore
+  // left a second, unhandled copy on `wss`, and an unhandled 'error' event throws -- so a
+  // dashboard port clash took the whole gateway down with EADDRINUSE instead of just
+  // disabling the dashboard. The report below is the server handler's job; this listener
+  // exists so the duplicate is consumed rather than fatal.
+  wss.on('error', () => { /* reported by the server 'error' handler below */ });
+
   wss.on('connection', (ws, req) => {
     // The event stream carries prompts and tool traces; gate it like the REST API.
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
