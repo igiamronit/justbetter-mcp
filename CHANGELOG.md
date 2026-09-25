@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 This project uses [Semantic Versioning](https://semver.org/). While on `0.x`, the config
 format and CLI surface may change between minor versions.
 
-## [Unreleased]
+## [0.3.0] — 2026-09-25
 
 ### Added
 
@@ -129,3 +129,4 @@ Two modes:
 
 [0.1.1]: https://github.com/igiamronit/justbetter-mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/igiamronit/justbetter-mcp/releases/tag/v0.1.0
+[0.3.0]: https://github.com/igiamronit/justbetter-mcp/releases/tag/v0.3.0
