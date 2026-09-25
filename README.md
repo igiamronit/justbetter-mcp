@@ -239,18 +239,18 @@ Regardless of which mode you use, all tool executions pass through strict safety
 - **npm**, **yarn**, or **pnpm**
 
 ### Configuration
-Create a `config.json` in the project root. Here is an example format detailing the pinned tools list, upstream server list, and LLM proxy configuration:
+Create a `config.json` in the project root, or let the first run seed one. This is the shipped default, which is what you get if you never touch it:
 
 ```json
 {
-  "semanticPromptInjection": false,
+  "semanticPromptInjection": true,
   "injectAllTools": false,
   "apiProvider": "gemini",
   "allowedDirectories": [],
   "upstreamServers": [
     {
       "name": "filesystem",
-      "command": "npx.cmd",
+      "command": "npx",
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
@@ -258,56 +258,48 @@ Create a `config.json` in the project root. Here is an example format detailing 
       ]
     },
     {
-      "name": "sqlite",
-      "command": "npx.cmd",
-      "args": [
-        "-y",
-        "mcp-server-sqlite-npx",
-        "database.db"
-      ]
-    },
-    {
-      "name": "websearch",
-      "command": "npx.cmd",
-      "args": [
-        "tsx",
-        "src/websearch-server.ts"
-      ]
-    },
-    {
       "name": "terminal",
-      "command": "npx.cmd",
+      "command": "${JUSTBETTER_NODE}",
       "args": [
-        "tsx",
+        "${JUSTBETTER_TSX}",
         "src/terminal-server.ts"
       ]
     },
     {
-      "name": "github",
-      "command": "npx.cmd",
+      "name": "websearch",
+      "command": "${JUSTBETTER_NODE}",
+      "args": [
+        "${JUSTBETTER_TSX}",
+        "src/websearch-server.ts"
+      ]
+    },
+    {
+      "name": "memory",
+      "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-github"
+        "@modelcontextprotocol/server-memory"
       ],
       "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+        "MEMORY_FILE_PATH": "${JUSTBETTER_HOME}/memory.json"
       }
     },
     {
-      "name": "github-remote",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
-      }
+      "name": "sequential-thinking",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
     }
   ],
   "llmProxy": {
     "enabled": true,
     "port": 4141,
     "host": "127.0.0.1",
-    "geminiApiKey": "YOUR_GEMINI_API_KEY",
-    "mistralApiKey": "YOUR_MISTRAL_API_KEY",
-    "model": "mistral-large-2512"
+    "geminiApiKey": "YOUR-GEMINI-API-KEY",
+    "mistralApiKey": "YOUR-MISTRAL-API-KEY",
+    "model": "gemini-2.0-flash"
   },
   "dashboard": {
     "enabled": true,
@@ -316,7 +308,8 @@ Create a `config.json` in the project root. Here is an example format detailing 
   },
   "pinnedTools": [],
   "destructiveTools": [
-    "run_terminal_command",
+    "write_file",
+    "edit_file",
     "delete_file",
     "drop_table"
   ]
@@ -330,6 +323,13 @@ Create a `config.json` in the project root. Here is an example format detailing 
 - **`allowedDirectories`.** The folders the agent may read and write. Any upstream arg that is `"."` or `"${JUSTBETTER_WORKSPACE}"` is replaced with this list — one placeholder expands to every folder, since the filesystem server accepts any number of paths. Leave it empty and it falls back to the directory the CLI was launched from. Set it from the TUI with `/setup` or `/config set workspace <dir>[,<dir>]`.
 - **Secrets.** Any `${NAME}` in an upstream `env` or `headers` value is expanded from the process environment, falling back to `~/.justbetter-mcp/secrets.json` (created `0600`). Provider keys resolve in the order `config.json` → environment (`GEMINI_API_KEY` / `MISTRAL_API_KEY`) → that secrets file, so credentials need not sit in the project directory where the filesystem server can read them back. An upstream whose `${NAME}` never resolves is **skipped**, not started: an unusable server would otherwise advertise its tools, get them indexed, and have the model call one only to receive a 401.
 - **`destructiveTools`.** Names listed here require an OS dialog confirmation before every execution. They must match the tool names the upstream server actually exposes (the filesystem server's reader is `read_text_file`, not `read_file`).
+- **Terminal access runs without a confirmation dialog by default, and is not confined to `allowedDirectories`.** `run_terminal_command` executes through a shell, so the model can reach anything your user account can — the directory scoping that applies to the filesystem server does not apply here. To require an OS confirmation on every command, add it to the list:
+
+  ```json
+  "destructiveTools": ["run_terminal_command", "write_file", "edit_file", "delete_file", "drop_table"]
+  ```
+
+  To remove terminal access entirely, delete the `terminal` entry from `upstreamServers`.
 - **Ports.** Both servers bind loopback. `llmProxy.authToken`, when set, is additionally required as a bearer token on `/v1`. The dashboard always requires the session token printed at startup.
 
 ### Running the Gateway & TUI

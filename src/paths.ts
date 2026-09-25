@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 /**
  * Every piece of persistent state this gateway owns (the sqlite-vec tool catalog,
@@ -31,7 +32,36 @@ export function dataDir(): string {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  // Published back so upstream servers can be pointed here with ${JUSTBETTER_HOME}.
+  // Without it a config naming that placeholder would look like an unresolved credential
+  // and the server would be skipped. Writing the resolved absolute path is idempotent.
+  process.env.JUSTBETTER_HOME = dir;
   return dir;
+}
+
+/**
+ * Absolute path to the tsx CLI this package runs under, or null if it cannot be found.
+ *
+ * The bundled upstream servers (terminal, websearch) are TypeScript, and the package
+ * deliberately ships no build step, so starting one means running it through tsx. A config
+ * saying `npx tsx src/terminal-server.ts` does not survive a real install: tsx is a nested
+ * dependency whose bin is never linked onto PATH, so npx either downloads a second copy
+ * from the network or fails outright. Resolving it here uses the copy already installed.
+ *
+ * Mirrors resolveTsx() in bin/cli.js: npm hoists tsx into the installing project's
+ * node_modules, and tsx does not export "./dist/cli.mjs", so resolve the package.json it
+ * does export and walk to the binary from there.
+ */
+export function resolveTsxPath(): string | null {
+  const require_ = createRequire(import.meta.url);
+  const candidates: string[] = [];
+  try {
+    candidates.push(path.join(path.dirname(require_.resolve('tsx/package.json')), 'dist', 'cli.mjs'));
+  } catch {
+    // Not resolvable from here; fall through to the checkout layout.
+  }
+  candidates.push(path.join(PACKAGE_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs'));
+  return candidates.find(candidate => fs.existsSync(candidate)) ?? null;
 }
 
 /**

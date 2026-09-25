@@ -956,6 +956,72 @@ const tests: TestCase[] = [
     }
   },
   {
+    name: 'config template: the shipped defaults start a terminal and resolve bundled servers',
+    async fn() {
+      const { readFileSync } = await import('node:fs');
+      const { existsSync } = await import('node:fs');
+      const {
+        resolveServerArgs, resolveServerCommand, NODE_TOKEN, TSX_TOKEN
+      } = await import(srcModule('src/upstream.ts'));
+      const { resolveServerEnv } = await import(srcModule('src/config.ts'));
+      const { dataDir } = await import(srcModule('src/paths.ts'));
+
+      const template = JSON.parse(readFileSync(path.join(repoRoot, 'config.example.json'), 'utf-8'));
+      const names = template.upstreamServers.map((s: any) => s.name);
+
+      // Terminal access is in CORE_PINNED_TOOLS, so a template that never starts the
+      // server leaves a pinned tool permanently unresolvable and the agent unable to run
+      // anything -- which is exactly what shipped through 0.2.0.
+      assert.ok(names.includes('terminal'),
+        `the shipped template must start the terminal server, got: ${names.join(', ')}`);
+
+      // @modelcontextprotocol/server-github is deprecated on npm and unmaintained.
+      const commands = JSON.stringify(template.upstreamServers);
+      assert.ok(!commands.includes('server-github'),
+        'the deprecated @modelcontextprotocol/server-github must not ship as a default');
+
+      // Every bundled server must name a file that really exists in the package, started
+      // with the node+tsx already installed rather than `npx tsx`, which cannot resolve a
+      // nested dependency's bin under a real install.
+      const bundled = template.upstreamServers.filter(
+        (s: any) => Array.isArray(s.args) && s.args.some((a: string) => a === TSX_TOKEN)
+      );
+      assert.ok(bundled.length >= 1, 'expected at least one bundled server in the template');
+
+      for (const server of bundled) {
+        assert.equal(server.command, NODE_TOKEN,
+          `${server.name} must launch via ${NODE_TOKEN}, got ${server.command}`);
+        assert.equal(resolveServerCommand(server.command), process.execPath);
+
+        const resolved = resolveServerArgs(server.args, [tempRoot]);
+        for (const arg of resolved) {
+          assert.ok(!arg.includes('${'),
+            `${server.name} left an unexpanded token in its args: ${arg}`);
+          assert.ok(existsSync(arg),
+            `${server.name} resolved to a path that does not exist: ${arg}`);
+        }
+      }
+    }
+  },
+  {
+    name: 'config template: ${JUSTBETTER_HOME} expands so upstream state lands in the state dir',
+    async fn() {
+      const { resolveServerEnv } = await import(srcModule('src/config.ts'));
+      const { dataDir } = await import(srcModule('src/paths.ts'));
+
+      // dataDir() publishes the resolved path back into the environment. Without that an
+      // upstream env value naming ${JUSTBETTER_HOME} reads as an unfilled credential and
+      // unresolvedSecrets() skips the server entirely.
+      const dir = dataDir();
+      assert.equal(process.env.JUSTBETTER_HOME, dir);
+
+      const resolved = resolveServerEnv({ MEMORY_FILE_PATH: '${JUSTBETTER_HOME}/memory.json' });
+      assert.equal(resolved?.MEMORY_FILE_PATH, `${dir}/memory.json`);
+      assert.ok(!resolved?.MEMORY_FILE_PATH.includes('${'),
+        'an unexpanded placeholder would make the memory server look uncredentialed and be skipped');
+    }
+  },
+  {
     name: 'embeddings: the model cache lives in the state directory, not node_modules',
     async fn() {
       const { env } = await import('@huggingface/transformers');

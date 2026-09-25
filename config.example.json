@@ -14,22 +14,39 @@
       ]
     },
     {
-      "name": "github",
+      "name": "terminal",
+      "command": "${JUSTBETTER_NODE}",
+      "args": [
+        "${JUSTBETTER_TSX}",
+        "src/terminal-server.ts"
+      ]
+    },
+    {
+      "name": "websearch",
+      "command": "${JUSTBETTER_NODE}",
+      "args": [
+        "${JUSTBETTER_TSX}",
+        "src/websearch-server.ts"
+      ]
+    },
+    {
+      "name": "memory",
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-github"
+        "@modelcontextprotocol/server-memory"
       ],
       "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+        "MEMORY_FILE_PATH": "${JUSTBETTER_HOME}/memory.json"
       }
     },
     {
-      "name": "github-remote",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
-      }
+      "name": "sequential-thinking",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
     }
   ],
   "llmProxy": {
@@ -47,7 +64,6 @@
   },
   "pinnedTools": [],
   "destructiveTools": [
-    "run_terminal_command",
     "write_file",
     "edit_file",
     "delete_file",

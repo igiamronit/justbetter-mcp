@@ -5,6 +5,37 @@ All notable changes to this project are documented here.
 This project uses [Semantic Versioning](https://semver.org/). While on `0.x`, the config
 format and CLI surface may change between minor versions.
 
+## [Unreleased]
+
+### Added
+
+- **The default config now ships a working toolset.** A fresh install previously started
+  only `filesystem` and a GitHub server, so `run_terminal_command` — which has always been
+  in `CORE_PINNED_TOOLS` — was pinned to a server that never ran. The agent could write a
+  script and then report it was unable to execute it, with no setting to change. Defaults
+  are now `filesystem`, `terminal`, `websearch`, `memory` and `sequential-thinking`.
+- **`${JUSTBETTER_NODE}` and `${JUSTBETTER_TSX}` config tokens.** The bundled TypeScript
+  servers are started with the interpreter and tsx copy already installed. The previous
+  `npx tsx src/terminal-server.ts` form only worked in a git checkout: `tsx` is a nested
+  dependency whose bin is never linked onto `PATH`, so under a real install npx would
+  download a second copy or fail. A bundled server is now cleanly `skipped` with a readable
+  reason when tsx cannot be found.
+- **`${JUSTBETTER_HOME}` expands in upstream `env` values**, so an upstream can keep its
+  state beside ours instead of inside `node_modules`. The `memory` server writes to
+  `~/.justbetter-mcp/memory.json` because of this.
+
+### Changed
+
+- **`run_terminal_command` is no longer in `destructiveTools`**, so shell commands run
+  without an OS confirmation dialog. Note that it executes through a shell and, unlike the
+  filesystem server, is **not** restricted to `allowedDirectories`. Add it back to
+  `destructiveTools` to require confirmation, or remove the `terminal` upstream to drop the
+  capability; both are documented in the README.
+- **Both GitHub upstreams are no longer defaults.** `@modelcontextprotocol/server-github`
+  is deprecated on npm and unmaintained since April 2025, and both entries needed a
+  `GITHUB_PERSONAL_ACCESS_TOKEN` that most first runs do not have. GitHub is now opt-in;
+  the remote `https://api.githubcopilot.com/mcp/` endpoint is the maintained option.
+
 ## [0.2.0] — 2026-09-08
 
 ### Added

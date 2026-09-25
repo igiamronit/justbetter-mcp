@@ -6,7 +6,7 @@ import type { Config } from "./config.js";
 import { resolveServerEnv, UpstreamServerSchema } from "./config.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { indexTools } from "./catalog.js";
-import { PACKAGE_ROOT, invocationCwd } from "./paths.js";
+import { PACKAGE_ROOT, invocationCwd, resolveTsxPath } from "./paths.js";
 import path from "path";
 import fs from "fs";
 import os from "os";
@@ -32,6 +32,22 @@ export function normaliseCommand(command: string): string {
   const bare = command.toLowerCase().endsWith(".cmd") ? command.slice(0, -4) : command;
   if (!SHIMMED_COMMANDS.includes(bare.toLowerCase())) return command;
   return process.platform === "win32" ? bare + ".cmd" : bare;
+}
+
+/**
+ * Tokens that let a config start one of the servers bundled inside this package without
+ * knowing where it was installed.
+ *
+ * `${JUSTBETTER_NODE}` is the interpreter already running the gateway, and
+ * `${JUSTBETTER_TSX}` is the tsx CLI beside it. Together they replace `npx tsx <file>`,
+ * which only works in a git checkout -- see resolveTsxPath() for why.
+ */
+export const NODE_TOKEN = "${JUSTBETTER_NODE}";
+export const TSX_TOKEN = "${JUSTBETTER_TSX}";
+
+export function resolveServerCommand(command: string): string {
+  if (command.trim() === NODE_TOKEN) return process.execPath;
+  return normaliseCommand(command);
 }
 
 /**
@@ -64,6 +80,12 @@ export function resolveServerArgs(args: string[], allowedDirectories: string[] =
 
   return args.flatMap(arg => {
     if (WORKSPACE_TOKENS.has(arg)) return workspace;
+    // Checked before the generic branch below: the token names no path that exists, so it
+    // would otherwise pass through verbatim and the server would fail to start.
+    if (arg.trim() === TSX_TOKEN) {
+      const tsx = resolveTsxPath();
+      return [tsx ?? arg];
+    }
     if (!arg || arg.startsWith("-") || path.isAbsolute(arg)) return [arg];
     const candidate = path.resolve(PACKAGE_ROOT, arg);
     return [fs.existsSync(candidate) ? candidate : arg];
@@ -109,6 +131,18 @@ export async function connectSingleUpstream(rawServerConfig: any, allowedDirecto
     console.error(
       `[Upstream Manager] Skipping '${serverConfig.name}': ${missingSecrets.join(', ')} not set. ` +
       `Set it in the environment or in ~/.justbetter-mcp/secrets.json to enable these tools.`
+    );
+    return;
+  }
+
+  // A bundled TypeScript server cannot start without the tsx runtime. Saying so beats
+  // spawning node with an unexpanded "${JUSTBETTER_TSX}" argument and reporting whatever
+  // error that produces, which names nothing the user can act on.
+  if (serverConfig.args?.some(arg => arg.trim() === TSX_TOKEN) && !resolveTsxPath()) {
+    serverStatuses[serverConfig.name] = 'skipped';
+    console.error(
+      `[Upstream Manager] Skipping '${serverConfig.name}': the tsx runtime could not be found, ` +
+      `so the bundled server cannot be started. Reinstalling justbetter-mcp should restore it.`
     );
     return;
   }
@@ -172,7 +206,7 @@ export async function connectSingleUpstream(rawServerConfig: any, allowedDirecto
     // src/terminal-server.ts") only starts when the gateway happens to have been
     // launched from the repo — so those servers vanish under Claude Desktop or Cursor.
     const transport = new StdioClientTransport({
-      command: normaliseCommand(serverConfig.command!),
+      command: resolveServerCommand(serverConfig.command!),
       args: resolveServerArgs(serverConfig.args, allowedDirectories),
       cwd: serverConfig.cwd ?? os.tmpdir(),
       stderr: 'pipe',
