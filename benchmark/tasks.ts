@@ -56,7 +56,7 @@ const CSV_TOTAL = 1200 + 450 + 90;
 export const TASKS: Task[] = [
   {
     id: 't1-read-count',
-    prompt: 'Read the file notes.txt in your working folder. Count how many lines it has, then write just that number into a new file called count.txt. Do not write anything else into count.txt.',
+    prompt: 'Read the file notes.txt in your working folder. Count how many non-empty lines it has, then write just that number into a new file called count.txt. Do not write anything else into count.txt.',
     expectedTools: ['read_text_file', 'read_file', 'write_file'],
     maxTurns: 10,
     fixture: dir => fs.writeFileSync(path.join(dir, 'notes.txt'), NOTES),
