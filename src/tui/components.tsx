@@ -38,10 +38,12 @@ export function InputBox({ theme, value, onChange, onSubmit }: {
 }) {
   const accent = style(theme, 'accent');
   const handleSubmit = (submitted: string) => {
-    if (submitted.trim()) {
-      onSubmit(submitted.trim());
-      onChange('');
-    }
+    const text = submitted.trim();
+    if (!text) return;
+    // Cleared before submitting, not after: the handler may put a completed command back
+    // in the field, and clearing afterwards would wipe it out again.
+    onChange('');
+    onSubmit(text);
   };
 
   const field = (

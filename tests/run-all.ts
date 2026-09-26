@@ -64,6 +64,7 @@ const SYNC_START = ESC + '[?2026h';
 const ARROW_UP = ESC + '[A';
 const ARROW_DOWN = ESC + '[B';
 const ENTER_KEY = String.fromCharCode(13);
+const BACKSPACE_KEY = String.fromCharCode(127);
 
 const tests: TestCase[] = [
   {
@@ -1065,6 +1066,183 @@ const tests: TestCase[] = [
           assert.ok(after.includes(BOX_TOP_LEFT), 'the input box must return after an interrupt');
           // What the user typed is still there; an interrupt that erased history would be worse.
           assert.ok(after.includes('hi'), 'the submitted message must survive the interrupt');
+        } finally {
+          app.unmount();
+          await wait(60);
+        }
+      } finally {
+        globalThis.fetch = savedFetch;
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'tui app: a message typed before the gateway is ready is not silently dropped',
+    async fn() {
+      const savedArgv = process.argv;
+      const bootConfig = tempFile('boot-config.json');
+      writeJson(bootConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', bootConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 100;
+        stdout.rows = 30;
+        let frameBuffer = '';
+        let allOutput = '';
+        stdout.write = (chunk: any) => {
+          const text = String(chunk);
+          if (text.includes(SYNC_START)) frameBuffer = '';
+          frameBuffer += text;
+          allOutput += text;
+          return true;
+        };
+
+        const strip = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+        // The gateway is a child process: the TUI renders and accepts input for the seconds
+        // it takes to come up, and mcpClient is null for all of them. The agentic loop used
+        // to be a `while (mcpClient)`, so a message sent in that window was echoed into the
+        // transcript and then dropped without a word -- no reply, no error, nothing.
+        const app = render(React.createElement(App, { mcpClient: null }), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+
+        try {
+          await wait(250);
+          const message = 'are you there';
+          for (const character of message) { stdin.write(character); await wait(12); }
+          stdin.write(ENTER_KEY);
+          await wait(400);
+
+          const seen = strip(allOutput);
+          assert.ok(seen.includes('still starting'),
+            'a submit before the gateway is up must say why nothing happened: ' + seen.slice(-500));
+          // Losing what someone typed is the other half of the bug.
+          assert.ok(strip(frameBuffer).includes(message),
+            'the unsent message must be left in the input box: ' + strip(frameBuffer));
+          // It was never sent, so it must not appear as a turn in the transcript.
+          const asTurn = seen.split(BULLET + ' ' + message).length - 1;
+          assert.equal(asTurn, 0, 'the unsent message must not be recorded as a turn');
+        } finally {
+          app.unmount();
+          await wait(60);
+        }
+      } finally {
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'tui app: a bare slash never reaches the model',
+    async fn() {
+      const savedArgv = process.argv;
+      const savedFetch = globalThis.fetch;
+      const slashConfig = tempFile('slash-config.json');
+      writeJson(slashConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', slashConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        // Any model call at all is the bug: "/" and "/nonsense" are for the TUI to answer.
+        let modelCalls = 0;
+        globalThis.fetch = ((..._args: any[]) => {
+          modelCalls++;
+          return new Promise(() => { /* never settles; the turn would hang visibly */ });
+        }) as any;
+
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 92;
+        stdout.rows = 30;
+        let frameBuffer = '';
+        let allOutput = '';
+        stdout.write = (chunk: any) => {
+          const text = String(chunk);
+          if (text.includes(SYNC_START)) frameBuffer = '';
+          frameBuffer += text;
+          allOutput += text;
+          return true;
+        };
+
+        const strip = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        const press = async (sequence: string) => { stdin.write(sequence); await wait(60); };
+
+        const fakeClient: any = { callTool: async () => ({ content: [] }) };
+        const app = render(React.createElement(App, { mcpClient: fakeClient }), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+
+        try {
+          await wait(250);
+
+          // Enter on a bare "/" used to submit it as a chat message, so the gateway spent a
+          // turn thinking about a slash. It must complete from the menu instead.
+          await press('/');
+          await press(ENTER_KEY);
+          await wait(250);
+          assert.equal(modelCalls, 0, 'a bare "/" must not be sent to the model');
+          const completed = strip(frameBuffer);
+          assert.ok(completed.includes('/help'),
+            'Enter on "/" should put the highlighted command in the field: ' + completed);
+
+          // Clear the completed command out of the field.
+          for (let i = 0; i < 10; i++) await press(BACKSPACE_KEY);
+
+          // A command that does not exist is the TUI's to answer too, not the model's.
+          for (const character of '/nope') await press(character);
+          await press(ENTER_KEY);
+          await wait(250);
+          assert.equal(modelCalls, 0, 'an unknown command must not be sent to the model');
+          assert.ok(strip(allOutput).includes('Unknown command'),
+            'an unknown command must say so: ' + strip(allOutput).slice(-400));
+
+          // "/config set" with no value matched only the spaced form, so the bare command
+          // fell past every branch and became a chat message. It must print its usage.
+          for (const character of '/config set') await press(character);
+          await press(ENTER_KEY);
+          await wait(250);
+          assert.equal(modelCalls, 0, '"/config set" must not be sent to the model');
+          assert.ok(strip(allOutput).includes('Usage: /config set'),
+            '"/config set" must print its usage: ' + strip(allOutput).slice(-400));
         } finally {
           app.unmount();
           await wait(60);

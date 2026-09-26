@@ -46,6 +46,7 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
   const [interruptedAt, setInterruptedAt] = useState(0);
   const abortRef = React.useRef<AbortController | null>(null);
   const exitArmedRef = React.useRef<number>(0);
+  const wasConnectedRef = React.useRef(false);
   const [phase, setPhase] = useState<'setup' | 'chat'>(configNeedsSetup() ? 'setup' : 'chat');
   // A first run has no working config to fall back to, so the wizard is not escapable
   // there. Reached through /setup, it is.
@@ -86,9 +87,9 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
   const restartGateway = (reason: string) => {
     appendEvent({ type: 'system', text: reason });
     void bootGateway().then(err => {
-      appendEvent(err
-        ? { type: 'system', isError: true, text: `Gateway failed to start: ${err}` }
-        : { type: 'system', text: 'Gateway ready.' });
+      // Success is reported by the effect that watches for the client, so a restart and a
+      // first boot say the same thing exactly once.
+      if (err) appendEvent({ type: 'system', isError: true, text: `Gateway failed to start: ${err}` });
     });
   };
 
@@ -167,8 +168,27 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
     }
   }, { isActive: phase === 'chat' });
 
+  // Said once, on mount, when the gateway is already starting: a first run downloads the
+  // bundled servers and can sit there for a while, and "connecting" in the dim hint line
+  // was the only clue that the thing was not ready yet.
   useEffect(() => {
-    setIsConnected(Boolean(mcpClient));
+    if (!mcpClient && !configNeedsSetup()) {
+      appendEvent({ type: 'system', text: 'Starting the gateway... a first run downloads the bundled servers, so this can take a moment.' });
+    }
+    // Mount only: later changes are reported by the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The first boot is started outside the component, so only the arrival of the client
+  // tells the transcript the gateway came up. Announcing it here rather than in
+  // restartGateway means the initial start is reported as well, not just restarts.
+  useEffect(() => {
+    const connected = Boolean(mcpClient);
+    setIsConnected(connected);
+    if (connected && !wasConnectedRef.current) {
+      appendEvent({ type: 'system', text: 'Gateway ready.' });
+    }
+    wasConnectedRef.current = connected;
   }, [mcpClient]);
 
   // Menu selection must not point past the end when the filter narrows.
@@ -192,6 +212,13 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
     let history = [...initialHistory];
     let turns = 0;
     let requestToolsMisses = 0;
+
+    if (!mcpClient) {
+      // Unreachable from handleSubmit, which checks first. Kept explicit because the
+      // condition used to live in the `while` below, where falling through was silent.
+      appendEvent({ turnId, type: 'system', isError: true, text: 'The gateway is not connected, so nothing was sent.' });
+      return;
+    }
 
     while (mcpClient) {
       if (signal?.aborted) {
@@ -396,6 +423,18 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
   };
 
   const handleSubmit = async (text: string) => {
+    // The menu is open and the line is still a fragment, so Enter picks the highlighted
+    // command rather than submitting what was typed. Without this a bare "/" was not a
+    // command, matched nothing, and was sent to the model as an ordinary message.
+    const completions = matchingCommands(text);
+    if (completions.length > 0 && !completions.some(command => command.name === text)) {
+      const chosen = completions[menuSelection] ?? completions[0];
+      if (chosen) {
+        setDraft(chosen.name + ' ');
+        return;
+      }
+    }
+
     if (text.startsWith('/')) {
       if (text === '/exit' || text === '/quit') {
         process.exit(0);
@@ -473,7 +512,7 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
         return;
       }
 
-      if (text.startsWith('/config set ')) {
+      if (text === '/config set' || text.startsWith('/config set ')) {
         const setting = text.slice(12).trim();
         const spaceIdx = setting.indexOf(' ');
         if (spaceIdx === -1) {
@@ -557,9 +596,26 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
         }
         return;
       }
+
+      // Every branch above returns, so anything here only looked like a command. Falling
+      // through to the model instead spent a turn thinking about "/".
+      appendEvent({ type: 'system', isError: true,
+        text: `Unknown command: ${text} -- type /help for the list.` });
+      return;
     }
 
     if (isBusy) return;
+
+    // The gateway is a child process that takes a few seconds to come up -- longer on a
+    // first run, which downloads the bundled servers. Until it does there is nothing to
+    // send to, and the loop below used to exit without a word, so the message was echoed
+    // and then silently dropped. Keep what was typed and say why it has not gone yet.
+    if (!mcpClient) {
+      setDraft(text);
+      appendEvent({ type: 'system', text:
+        'The gateway is still starting, so this has not been sent. It is still in the box -- press Enter again in a moment.' });
+      return;
+    }
 
     const turnId = createId();
     const userMessage = { role: 'user', content: text };

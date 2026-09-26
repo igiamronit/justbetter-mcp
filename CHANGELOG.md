@@ -9,6 +9,19 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **Messages sent while the gateway was still starting vanished.** The TUI renders and takes
+  input immediately, but the gateway is a child process that takes seconds to come up --
+  longer on a first run, which downloads the bundled servers. The agentic loop was a
+  `while (mcpClient)`, so a message sent in that window was echoed into the transcript and
+  then dropped with no reply and no error, which looked like the app ignoring you. The
+  message now stays in the input box and says why it has not been sent, the gateway
+  announces that it is starting and when it is ready, and no path can end a turn silently.
+- **A bare `/` was sent to the model as a chat message.** Pressing Enter with the command
+  menu open submitted whatever was typed instead of the highlighted command, and an
+  unrecognised command fell past every branch into the chat path -- so typing `/` and Enter
+  spent a whole turn thinking about a slash. Enter now completes a command fragment from the
+  menu, an unknown command says so, and `/config set` with no value prints its usage rather
+  than reaching the model.
 - **Terminal commands ran in the temp directory, not your project.** Upstreams are spawned
   with `cwd: os.tmpdir()` on purpose — a process sitting in the install folder is what makes
   `npm install -g` fail with EBUSY on Windows — and the terminal server took no path
