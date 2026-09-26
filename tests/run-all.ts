@@ -1035,10 +1035,12 @@ const tests: TestCase[] = [
         stdout.columns = 92;
         stdout.rows = 30;
         let frameBuffer = '';
+        let allOutput = '';
         stdout.write = (chunk: any) => {
           const text = String(chunk);
           if (text.includes(SYNC_START)) frameBuffer = '';
           frameBuffer += text;
+          allOutput += text;
           return true;
         };
 
@@ -1072,7 +1074,9 @@ const tests: TestCase[] = [
           // The turn ended, so the prompt comes back.
           assert.ok(after.includes(BOX_TOP_LEFT), 'the input box must return after an interrupt');
           // What the user typed is still there; an interrupt that erased history would be worse.
-          assert.ok(after.includes('hi'), 'the submitted message must survive the interrupt');
+          // Checked against everything written rather than the newest frame: the submitted
+          // line is printed once by <Static>, so by now it is scrollback, not live output.
+          assert.ok(strip(allOutput).includes('hi'), 'the submitted message must survive the interrupt');
         } finally {
           app.unmount();
           await wait(60);
@@ -1301,6 +1305,80 @@ const tests: TestCase[] = [
           // The sentinel is for the model's history only and must never reach the screen.
           assert.ok(!seen.includes('[Empty response]'),
             'the internal sentinel must not be shown to the user');
+        } finally {
+          app.unmount();
+          await wait(60);
+        }
+      } finally {
+        globalThis.fetch = savedFetch;
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'tui app: the submitted line is printed once, not rewritten on every repaint',
+    async fn() {
+      const savedArgv = process.argv;
+      const savedFetch = globalThis.fetch;
+      const repaintConfig = tempFile('repaint-config.json');
+      writeJson(repaintConfig, {
+        apiProvider: 'mistral',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', mistralApiKey: 'sk-real-key', model: 'mistral-medium-latest' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', repaintConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        // A turn that never answers, so the spinner keeps the live region repainting.
+        globalThis.fetch = (() => new Promise(() => { /* never settles */ })) as any;
+
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 120;
+        stdout.rows = 30;
+        // Only what is written from the moment the line is submitted.
+        let written = '';
+        let counting = false;
+        stdout.write = (chunk: any) => { if (counting) written += String(chunk); return true; };
+
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        const fakeClient: any = { callTool: async () => ({ content: [] }) };
+        const app = render(React.createElement(App, { mcpClient: fakeClient }), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+
+        try {
+          await wait(250);
+          const message = 'hello';
+          for (const character of message) { stdin.write(character); await wait(12); }
+          counting = true;
+          stdin.write(ENTER_KEY);
+          await wait(2600);
+
+          // The submitted line is final the moment it is sent, so it belongs in <Static>,
+          // which writes each item once. It used to stay in the live region for the whole
+          // turn instead, and the live region is rewritten on every spinner frame -- dozens
+          // of times over a few seconds. Ink writes those frames through a throttle but
+          // writes static output immediately, so a frame in flight could land after a static
+          // write and leave the line behind again, turning one "hello" into several.
+          const times = written.split('> ' + message).length - 1;
+          assert.ok(times <= 3,
+            'the submitted line must be printed once, not redrawn on every frame; it was written '
+            + times + ' times');
         } finally {
           app.unmount();
           await wait(60);

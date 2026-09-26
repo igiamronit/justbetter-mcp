@@ -9,6 +9,16 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **One submitted line could appear three or four times.** The line you typed stayed in the
+  live region for the whole turn, and the live region is rewritten on every spinner frame --
+  measured at 59 rewrites over five seconds. Ink writes those frames through a throttle but
+  writes `<Static>` output immediately and directly, so a frame already in flight could land
+  after a static write and re-emit the live region on top of it, leaving the line behind
+  again. It showed up on a slow turn, which is why a rate-limited key made it visible: the
+  proxy retries a 429 four times with backoff, so the turn stayed open for about fourteen
+  seconds. A submitted line is final the instant it is sent, so it is now committed to
+  `<Static>` immediately and written once. Tool output still waits for the turn to end,
+  because it is replaced as it runs and Ctrl+X can still expand it.
 - **A blank answer from the model printed nothing at all.** When a reply came back with no
   content and no tool calls, the turn put an `[Empty response]` sentinel into the model's
   history for its own benefit, filtered that sentinel back out of the transcript, and ended

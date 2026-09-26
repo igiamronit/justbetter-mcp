@@ -218,16 +218,35 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
   }, [suggestions.length]);
 
   /**
-   * Hands everything from the finished turn to <Static>.
+   * Hands finished events to <Static>, which prints each one once and never redraws it.
    *
-   * Commits only while idle, and only whole turns. Committing an event as it arrived would
-   * print a tool result before the call it belongs to whenever a slow result landed after
-   * the next event, and nothing printed can be reordered afterwards.
+   * Tool output waits for the turn to end. A tool event is appended as a request, replaced
+   * with a "running" state and replaced again with its result, and Ctrl+X can expand it while
+   * the turn is live -- none of which is possible once a line is printed, because printed
+   * output cannot be rewritten or reordered.
+   *
+   * The line the user typed is different: it is final the instant it is submitted. It used to
+   * sit in the live region for the whole turn anyway, and the live region is rewritten on
+   * every clock tick. Ink writes those frames through a throttle but writes <Static> output
+   * immediately and directly, so a throttled frame already in flight can land after the
+   * static write and re-emit the live region on top of it. The copy it leaves behind is
+   * whatever the live region held -- the user's own line -- which is why one "hello" could
+   * turn into three or four while a rate-limited request was being retried. Committing it as
+   * soon as it arrives takes it out of the repainting region altogether, so it is written
+   * once, by <Static>, and no in-flight frame can reproduce it.
    */
   useEffect(() => {
-    if (isBusy) return;
-    setCommittedCount(count => (events.length > count ? events.length : count));
-  }, [isBusy, events.length]);
+    setCommittedCount(count => {
+      if (!isBusy) return events.length > count ? events.length : count;
+      // Only up to and including the user's line: everything after it belongs to the turn
+      // in flight and has to stay redrawable.
+      let lastUserIndex = -1;
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i]?.type === 'user') { lastUserIndex = i; break; }
+      }
+      return lastUserIndex + 1 > count ? lastUserIndex + 1 : count;
+    });
+  }, [isBusy, events]);
 
   const runAgenticLoop = async (initialHistory: any[], turnId: string, signal?: AbortSignal) => {
     let history = [...initialHistory];
