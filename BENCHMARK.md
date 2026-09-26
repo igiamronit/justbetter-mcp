@@ -243,6 +243,32 @@ it. Both readings are defensible; this one is stated so it can be disagreed with
 The wording is duplicated from `src/llm-proxy.ts`. If that prompt changes and the harness's copy
 does not, the comparison silently stops being fair.
 
+## Known defect in the Mode 3 arm
+
+Mode 3's numbers from the first run are **not a clean measurement of "the cost of carrying every
+schema", and must not be presented as one.**
+
+When the first message is not the sentinel, `src/llm-proxy.ts` splices in its own system message:
+`[CRITICAL GATEWAY INSTRUCTIONS] ... Capabilities listed below only by name are NOT yet loaded --
+YOU MUST FIRST call the 'request_tools' function`. That happens regardless of `injectAllTools`, so
+Mode 3 is told to discover tools it has already been handed, whatever prompt the harness supplies.
+Observed effect on the trivial task: `list_directory` once, then **nine consecutive
+`request_tools` calls**, 78,765 tokens, and a failure on a task both other arms passed in five
+turns and 15k.
+
+Some of that inflation is real — a Mode 3 user really does get that advisory — but it is
+discovery cost, not schema-carrying cost, and the two must not be conflated in a token comparison.
+
+**The fix, for the next run:** Mode 3 should not go through the proxy at all. It should be the
+harness talking straight to the provider with the complete tool list from every upstream server,
+which is what an ordinary MCP client does and what the README means by "dumping every available
+tool directly into the prompt". Getting the full catalog means the harness connecting to the
+upstream servers itself rather than asking the gateway, since the gateway only ever advertises the
+Mode 2 surface.
+
+Until that is done, Mode 3 is reported as an upper bound with this caveat attached, not as the
+baseline the README describes.
+
 ## Fairness controls
 
 - **Interleave by task, not by arm.** Task 1 across all three arms, then task 2. Running all of
