@@ -9,6 +9,16 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **The gateway was writing over the TUI, stranding a line on screen each time.** The MCP SDK
+  spawns a child with `stdio: ['pipe', 'pipe', params.stderr ?? 'inherit']`, and the stderr
+  option was never set -- so the gateway held a direct write to the terminal the TUI was
+  drawing on. `SILENCE_LOGS` stubbed `console.log` and `console.error` but not
+  `console.warn`, and the rate-limit retry notice in `fetch-retry.ts` is a `console.warn`.
+  Each notice landed inside ink's live region and pushed the cursor down a line, so the frame
+  already there stayed on screen and the next one was drawn below it. A rate-limited turn
+  retries four times at 0s, 2s, 6s and 14s, which is exactly where the leftover lines
+  appeared. Every console channel is silenced now, and the child's stderr is piped into the
+  transcript as detail output (`/verbose` shows it) so no future log can reach the screen.
 - **One submitted line could appear three or four times.** The line you typed stayed in the
   live region for the whole turn, and the live region is rewritten on every spinner frame --
   measured at 59 rewrites over five seconds. Ink writes those frames through a throttle but

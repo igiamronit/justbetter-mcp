@@ -189,6 +189,16 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
     }
   }, { isActive: phase === 'chat' });
 
+  // The gateway's stderr is piped rather than inherited, so its output arrives here instead
+  // of being written over the live region. Detail events: hidden in quiet mode, shown by
+  // /verbose, and never lost.
+  useEffect(() => {
+    onGatewayLog = (line: string) => {
+      appendEvent({ type: 'system', detail: true, text: `[gateway] ${line}` });
+    };
+    return () => { onGatewayLog = () => {}; };
+  }, []);
+
   // Said once, on mount, when the gateway is already starting: a first run downloads the
   // bundled servers and can sit there for a while, and "connecting" in the dim hint line
   // was the only clue that the thing was not ready yet.
@@ -773,6 +783,37 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
 
 let gatewayClient: Client | null = null;
 let rerenderApp: () => void = () => {};
+/** Set by the App so the gateway's own output can reach the transcript. */
+let onGatewayLog: (line: string) => void = () => {};
+
+/**
+ * How the gateway child is spawned.
+ *
+ * `stderr: 'pipe'` is the load-bearing part. The MCP SDK defaults this to 'inherit'
+ * (`stdio: ['pipe', 'pipe', params.stderr ?? 'inherit']`), which hands the child a direct
+ * write to the terminal the TUI is drawing on. Anything it printed landed inside ink's live
+ * region and pushed the cursor down a line, so the frame that was there stayed on screen and
+ * ink drew the next one below it -- a stale "Thinking" line per message, and before that a
+ * stale copy of whatever else the live region held. Silencing the gateway's loggers fixes
+ * today's offender; piping its stderr means the next one cannot do this at all.
+ *
+ * Exported so a test can assert the stream is captured rather than inherited.
+ */
+export function gatewayTransportOptions() {
+  return {
+    command: process.execPath,
+    // Go through bin/cli.js rather than invoking tsx directly: it is the single
+    // place that knows how to locate the tsx runtime across hoisted and nested
+    // node_modules layouts.
+    args: [packagePath('bin', 'cli.js'), 'gateway', configPath],
+    // Not the package root: a live process sitting in the install directory is what
+    // makes `npm install -g` fail with EBUSY on Windows. Every path passed above is
+    // absolute, so there is nothing here that needs a meaningful cwd.
+    cwd: os.tmpdir(),
+    env: { ...(process.env as Record<string, string>), SILENCE_LOGS: '1' },
+    stderr: 'pipe' as const
+  };
+}
 
 /**
  * Starts, or restarts, the gateway child process and waits for its LLM proxy.
@@ -788,18 +829,22 @@ export async function bootGateway(): Promise<string | null> {
   }
 
   try {
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      // Go through bin/cli.js rather than invoking tsx directly: it is the single
-      // place that knows how to locate the tsx runtime across hoisted and nested
-      // node_modules layouts.
-      args: [packagePath('bin', 'cli.js'), 'gateway', configPath],
-      // Not the package root: a live process sitting in the install directory is what
-      // makes `npm install -g` fail with EBUSY on Windows. Every path passed above is
-      // absolute, so there is nothing here that needs a meaningful cwd.
-      cwd: os.tmpdir(),
-      env: { ...(process.env as Record<string, string>), SILENCE_LOGS: '1' }
-    });
+    const transport = new StdioClientTransport(gatewayTransportOptions());
+    // The child's diagnostics belong in the transcript, not written over it. Quiet by
+    // default because most of it is startup chatter; /verbose brings it back.
+    const stderrStream = transport.stderr;
+    if (stderrStream) {
+      let pending = '';
+      stderrStream.on('data', (chunk: Buffer | string) => {
+        pending += String(chunk);
+        const lines = pending.split(String.fromCharCode(10));
+        pending = lines.pop() ?? '';
+        for (const line of lines) {
+          const text = line.trim();
+          if (text) onGatewayLog(text);
+        }
+      });
+    }
 
     const client = new Client({ name: 'justbetter-tui', version: '1.0.0' }, { capabilities: {} });
     await client.connect(transport);

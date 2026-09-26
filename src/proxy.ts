@@ -17,10 +17,19 @@ import { activeUpstreams, connectAllUpstreams } from "./upstream.js";
 import { passesPreconditions } from "./gates/precondition.js";
 import { resolveConfigPath } from "./paths.js";
 
-// Silence background logs if running under the TUI
+// Silence background logs if running under the TUI.
+//
+// console.warn was missing here, and console.warn writes to stderr. The gateway runs as a
+// child of the TUI, so anything it prints lands in the middle of the live region and shoves
+// ink's cursor down a line, stranding the frame that was already there. The rate-limit
+// retry notice in fetch-retry.ts is a console.warn, which is why a rate-limited turn left a
+// trail of "Thinking" lines behind it: one per retry, at 0s, 2s, 6s and 14s.
 if (process.env.SILENCE_LOGS === "1") {
   console.log = () => {};
   console.error = () => {};
+  console.warn = () => {};
+  console.info = () => {};
+  console.debug = () => {};
 }
 
 const REQUEST_TOOLS_MCP_SCHEMA = {

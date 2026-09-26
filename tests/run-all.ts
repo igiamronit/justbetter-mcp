@@ -1391,6 +1391,52 @@ const tests: TestCase[] = [
     }
   },
   {
+    name: 'tui: the gateway cannot write over the TUI, and every log channel is silenced',
+    async fn() {
+      const savedArgv = process.argv;
+      const stderrConfig = tempFile('gateway-stderr-config.json');
+      writeJson(stderrConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', stderrConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { gatewayTransportOptions } = await import(srcModule('src/tui.tsx'));
+        const options = gatewayTransportOptions();
+
+        // The MCP SDK spawns with `stdio: ['pipe', 'pipe', params.stderr ?? 'inherit']`, so
+        // leaving this unset hands the gateway a direct write to the terminal the TUI is
+        // drawing on. Anything it printed landed inside ink's live region and pushed the
+        // cursor down, stranding the frame already there -- a leftover "Thinking" line per
+        // gateway message. Capturing the stream is what makes that structurally impossible.
+        assert.equal(options.stderr, 'pipe',
+          "the gateway's stderr must be captured, never inherited onto the TUI's terminal");
+        assert.equal(options.env.SILENCE_LOGS, '1', 'the gateway must be told to stay quiet');
+
+        // Belt and braces: the quiet switch has to cover every channel that reaches stderr.
+        // It silenced log and error but not warn, and the rate-limit retry notice in
+        // fetch-retry.ts is a console.warn -- so the one message that fired during a
+        // rate-limited turn was the one that got through.
+        const { readFileSync } = await import('node:fs');
+        const proxySource = readFileSync(path.join(repoRoot, 'src', 'proxy.ts'), 'utf-8');
+        const silenced = proxySource.slice(
+          proxySource.indexOf('SILENCE_LOGS'),
+          proxySource.indexOf('REQUEST_TOOLS_MCP_SCHEMA')
+        );
+        for (const channel of ['log', 'error', 'warn', 'info', 'debug']) {
+          assert.ok(silenced.includes(`console.${channel} = () => {}`),
+            `console.${channel} must be silenced under the TUI, or it writes over the live region`);
+        }
+      } finally {
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
     name: 'tui app: a bare slash never reaches the model',
     async fn() {
       const savedArgv = process.argv;
