@@ -438,17 +438,27 @@ async function runOnce(options: {
   const { mode, task, gateway } = options;
   const started = Date.now();
 
-  // The tool source. This is the ONLY difference between the arms.
-  const listed = await gateway.client.listTools();
-  const catalogTools = (listed.tools ?? []).map(tool => ({
-    type: 'function' as const,
-    function: { name: tool.name, description: tool.description ?? '', parameters: tool.inputSchema ?? { type: 'object', properties: {} } }
-  }));
-  const catalogSize = catalogTools.length;
+  /**
+   * The tool source. This is the ONLY difference between the arms.
+   *
+   * Listing once outside the loop was a serious measurement bug. The gateway advertises newly
+   * discovered tools and fires tools/list_changed, and a real MCP client re-lists and carries the
+   * grown array on every later turn. Listing once meant Mode 2 carried two schemas for the whole
+   * run while Mode 1 carried about fifteen, so Mode 2 looked far cheaper than it is. It is
+   * re-listed every turn now.
+   */
+  const listTools = async () => {
+    const listed = await gateway.client.listTools();
+    return (listed.tools ?? []).map(tool => ({
+      type: 'function' as const,
+      function: { name: tool.name, description: tool.description ?? '', parameters: tool.inputSchema ?? { type: 'object', properties: {} } }
+    }));
+  };
+  let catalogTools = await listTools();
+  let catalogSize = catalogTools.length;
 
   const url = mode === 'mode2' ? `${OLLAMA_BASE}/chat/completions` : `${gateway.proxyBase}/v1/chat/completions`;
   const key = mode === 'mode2' ? options.key : null;
-  const tools = mode === 'mode2' ? catalogTools : null;
 
   const messages: any[] = [
     {
@@ -473,6 +483,12 @@ async function runOnce(options: {
 
   while (turn < task.maxTurns) {
     turn++;
+    // Mode 1 and Mode 3 send no tools: the proxy puts them in. Mode 2 sends whatever the gateway
+    // currently advertises, refreshed each turn.
+    const tools = mode === 'mode2' ? catalogTools : null;
+    if (mode === 'mode2' && tools) {
+      catalogSize = Math.max(catalogSize, tools.length);
+    }
     const result = await chat({ url, key, messages, tools });
     modelReported = result.modelReported;
     promptTokens += result.usage.prompt;
@@ -540,6 +556,11 @@ async function runOnce(options: {
         content: resultText.slice(0, 4000)
       });
     }
+
+    // request_tools grows the advertised set, so a real client would have a bigger array by now.
+    if (mode === 'mode2') {
+      try { catalogTools = await listTools(); } catch { /* keep the previous list */ }
+    }
   }
 
   const transcript = assistantText.join('\n');
@@ -603,12 +624,31 @@ const resultsRoot = path.join(repoRoot, 'benchmark', 'results');
 
 async function main() {
   const key = ollamaKey();
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const stamp = process.env.BENCH_RESUME || new Date().toISOString().replace(/[:.]/g, '-');
   const outDir = path.join(resultsRoot, stamp);
   fs.mkdirSync(outDir, { recursive: true });
   const rawPath = path.join(outDir, 'raw.jsonl');
   const turnsPath = path.join(outDir, 'turns.csv');
-  fs.writeFileSync(turnsPath, 'run_id,mode,task_id,band,turn,prompt_tokens,completion_tokens,total_tokens,tools_injected\n');
+  if (!fs.existsSync(turnsPath)) {
+    fs.writeFileSync(turnsPath, 'run_id,mode,task_id,band,turn,prompt_tokens,completion_tokens,total_tokens,tools_injected' + String.fromCharCode(10));
+  }
+
+  // Resume: BENCH_RESUME=<results dir name> reuses that directory and skips pairs already in its
+  // raw.jsonl. Stopping a run and continuing later must not cost the finished work.
+  const resumeFrom = process.env.BENCH_RESUME;
+  const alreadyDone = new Set<string>();
+  if (resumeFrom) {
+    const previous = path.join(resultsRoot, resumeFrom, 'raw.jsonl');
+    if (fs.existsSync(previous)) {
+      for (const line of fs.readFileSync(previous, 'utf-8').split(String.fromCharCode(10))) {
+        if (!line.trim()) continue;
+        try {
+          const row = JSON.parse(line);
+          if (!row.abandoned) alreadyDone.add(`${row.taskId}__${row.mode}`);
+        } catch { /* skip a partial line */ }
+      }
+    }
+  }
 
   const band = process.env.BENCH_BAND || 'medium';
   const servers = BANDS[band] ?? BANDS.medium!;
@@ -633,6 +673,7 @@ async function main() {
       if (Date.now() - startedAt > BUDGET_WALL_MS) { stopReason = 'wall-clock budget'; break outer; }
 
       const runId = `${task.id}__${mode}`;
+      if (alreadyDone.has(runId)) { log(`${runId} already done, skipping`); continue; }
       let restarts = 0;
       let attempts = 0;
       let done = false;
@@ -643,7 +684,7 @@ async function main() {
         task.fixture(workspace);
         let gateway: Gateway | null = null;
         try {
-          log(`${task.id} / ${mode} (attempt ${attempts})`);
+          log(`[${rows.length + 1}/${taskList.length * MODES.length}] ${task.id} / ${mode} (attempt ${attempts}) — ${spentTokens} tokens spent so far`);
           gateway = await startGateway({ workspace, servers, mode, key });
           const outcome = await runOnce({ mode, task, workspace, gateway, key });
           spentTokens += outcome.totalTokens;
