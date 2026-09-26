@@ -332,7 +332,15 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
         const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
         if (!message.content && toolCalls.length === 0) {
+          // The sentinel goes into the history so the model sees that its own turn was
+          // blank. It is filtered out of the transcript just below, which meant a blank
+          // answer ended the turn without printing anything at all: the message was echoed
+          // and then nothing, no reply and no error, which reads as the app ignoring you.
+          // A provider that is rate limiting or overloaded returns exactly this, so the one
+          // case that most needs explaining was the one that said least.
           message.content = "[Empty response]";
+          appendEvent({ turnId, type: 'system', isError: true, text:
+            'The model sent an empty reply. That usually means the provider is rate limiting or overloaded -- wait a moment and try again.' });
         }
 
         if (message.content && message.content !== "[Empty response]") {

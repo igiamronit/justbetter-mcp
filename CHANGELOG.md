@@ -9,6 +9,13 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **A blank answer from the model printed nothing at all.** When a reply came back with no
+  content and no tool calls, the turn put an `[Empty response]` sentinel into the model's
+  history for its own benefit, filtered that sentinel back out of the transcript, and ended
+  -- so the message was echoed and then absolutely nothing followed, no reply and no error.
+  A provider that is rate limiting or overloaded returns exactly this, so the case that most
+  needed explaining was the one that said least, and it looked like the CLI ignoring you. It
+  now says the reply was empty and why that usually happens.
 - **`/setup` offered a folder from some other project.** The workspace box was prefilled from
   `allowedDirectories` in the config, so a path saved by an earlier run came back every time
   and the folder you were actually standing in was ignored -- which is how an agent ended up

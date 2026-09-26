@@ -1237,6 +1237,82 @@ const tests: TestCase[] = [
     }
   },
   {
+    name: 'tui app: an empty model reply is reported instead of ending the turn in silence',
+    async fn() {
+      const savedArgv = process.argv;
+      const savedFetch = globalThis.fetch;
+      const emptyConfig = tempFile('empty-reply-config.json');
+      writeJson(emptyConfig, {
+        apiProvider: 'mistral',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', mistralApiKey: 'sk-real-key', model: 'mistral-medium-latest' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', emptyConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        // What a rate-limiting provider actually returns before it starts returning 429s: a
+        // perfectly valid 200 with nothing in it. The turn used to put a "[Empty response]"
+        // sentinel in the model's history, filter that sentinel out of the transcript, and
+        // break -- so the message was echoed and then absolutely nothing was printed.
+        globalThis.fetch = (async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({ choices: [{ message: { content: '', tool_calls: [] } }] }),
+          headers: { get: () => null }
+        })) as any;
+
+        const stdin: any = new PassThrough();
+        stdin.isTTY = true;
+        stdin.setRawMode = () => stdin;
+        stdin.ref = () => undefined;
+        stdin.unref = () => undefined;
+
+        const stdout: any = new EventEmitter();
+        stdout.isTTY = true;
+        stdout.columns = 100;
+        stdout.rows = 30;
+        let allOutput = '';
+        stdout.write = (chunk: any) => { allOutput += String(chunk); return true; };
+
+        const strip = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+        const fakeClient: any = { callTool: async () => ({ content: [] }) };
+        const app = render(React.createElement(App, { mcpClient: fakeClient }), {
+          stdin, stdout, exitOnCtrlC: false, patchConsole: false
+        });
+
+        try {
+          await wait(250);
+          for (const character of 'hello') { stdin.write(character); await wait(12); }
+          stdin.write(ENTER_KEY);
+          await wait(500);
+
+          const seen = strip(allOutput);
+          assert.ok(seen.includes('empty reply'),
+            'a blank answer must be reported, not swallowed: ' + seen.slice(-500));
+          // The sentinel is for the model's history only and must never reach the screen.
+          assert.ok(!seen.includes('[Empty response]'),
+            'the internal sentinel must not be shown to the user');
+        } finally {
+          app.unmount();
+          await wait(60);
+        }
+      } finally {
+        globalThis.fetch = savedFetch;
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
     name: 'tui app: a bare slash never reaches the model',
     async fn() {
       const savedArgv = process.argv;
