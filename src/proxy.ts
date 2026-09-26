@@ -307,7 +307,8 @@ async function main() {
       const usable: IndexedTool[] = [];
       for (const r of results) {
         if (passesPreconditions(r.tool_name, r.server_name, config)) {
-          markToolInjected(r.tool_name);
+          // The model asked for this one by name, so it outranks routine injections.
+          markToolInjected(r.tool_name, { requested: true });
           usable.push(r);
         }
       }

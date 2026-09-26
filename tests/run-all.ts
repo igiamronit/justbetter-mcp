@@ -1582,6 +1582,39 @@ const tests: TestCase[] = [
     }
   },
   {
+    name: 'catalog: a tool the model asked for survives carry-over instead of being evicted alphabetically',
+    async fn() {
+      const catalog: any = await import(srcModule('src/catalog.ts'));
+      const { markToolInjected, getRecentlyInjectedTools, indexTools, CARRY_OVER_LIMIT } = catalog;
+
+      // Names chosen so the alphabetical tiebreak and the correct answer disagree: the tool the
+      // model actually asked for sorts last, exactly like write_file among the filesystem tools.
+      const server = 'carryover-test';
+      const names = ['aaa_alpha', 'bbb_beta', 'ccc_gamma', 'ddd_delta', 'eee_epsilon',
+                     'fff_zeta', 'ggg_eta', 'hhh_theta', 'zzz_write_file'];
+      await indexTools(server, names.map(name => ({
+        name,
+        description: `test tool ${name}`,
+        inputSchema: { type: 'object', properties: {} }
+      })));
+
+      // One turn of ordinary injection: everything the proxy happened to pick, all inside the same
+      // second, which is all CURRENT_TIMESTAMP can resolve.
+      for (const name of names.slice(0, 8)) markToolInjected(name);
+      // Then the model goes looking for the one it needs and finds it.
+      markToolInjected('zzz_write_file', { requested: true });
+      // A second routine turn re-marks the same crowd, which is what used to bury the discovery.
+      for (const name of names.slice(0, 8)) markToolInjected(name);
+
+      const carried = getRecentlyInjectedTools([], CARRY_OVER_LIMIT).map((row: any) => row.tool_name);
+      assert.ok(carried.length <= CARRY_OVER_LIMIT, 'the window must stay bounded');
+      // Alphabetically this name is dead last, so before the fix it never survived: the model
+      // rediscovered it every turn, which cost ten request_tools calls on a single task.
+      assert.ok(carried.includes('zzz_write_file'),
+        'a tool the model explicitly requested must survive carry-over: ' + JSON.stringify(carried));
+    }
+  },
+  {
     name: 'llm proxy: the request_tools instruction is only issued when something is undiscovered',
     async fn() {
       const { buildToolAccessSection, buildGatewayAdvisory } = await import(srcModule('src/llm-proxy.ts'));
