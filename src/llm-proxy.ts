@@ -18,6 +18,41 @@ import { TOKEN_LOG_PATH } from './paths.js';
  * typed content parts (any multimodal or cache-annotated request). Assuming a string
  * and calling .split() on it turned every such request into a 500.
  */
+/**
+ * The tool-access section of the system prompt.
+ *
+ * `summaryPool` lists capabilities that exist but were NOT injected this turn. When it is empty
+ * every tool the model could want is already in its array -- which is always true with
+ * `injectAllTools`, and true in Mode 1 whenever retrieval happened to cover the whole catalog.
+ *
+ * Telling the model to call `request_tools` first in that situation is simply false, and it obeys:
+ * observed behaviour was `list_directory` once followed by nine consecutive `request_tools` calls
+ * for tools already in its array, burning 78k tokens and failing the task. So the instruction is
+ * only issued when there is actually something left to discover.
+ */
+export function buildToolAccessSection(summaryPool: string): string {
+  const hasUnloaded = summaryPool.trim().length > 0;
+  if (!hasUnloaded) {
+    return 'Every tool you need is already in your tool array with full parameters. Call them directly. '
+      + 'There is nothing left to discover, so do not call request_tools.';
+  }
+  return 'Tools are injected per turn based on relevance. Tools provided in your native tool array with '
+    + 'full parameters are ready to call now. Capabilities listed below only by name are NOT yet loaded '
+    + '-- you must call request_tools with a description before you can use them. Calling an unloaded '
+    + 'tool directly will be blocked.'
+    + String.fromCharCode(10) + String.fromCharCode(10)
+    + 'Available capabilities:' + String.fromCharCode(10) + summaryPool;
+}
+
+/** The advisory added for clients that did not send the CLI sentinel. */
+export function buildGatewayAdvisory(summaryPool: string): string {
+  const lf = String.fromCharCode(10);
+  return lf + lf + '[CRITICAL GATEWAY INSTRUCTIONS]' + lf
+    + 'You are operating through an MCP Gateway that uses Dynamic Semantic Tool Injection. '
+    + 'DO NOT hallucinate tool calls. '
+    + buildToolAccessSection(summaryPool);
+}
+
 function extractText(content: any): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -324,10 +359,7 @@ Never report "file not found" or "doesn't exist" after a single attempt. Try at 
 Reflect on tool results before acting on them. After receiving tool results, carefully reflect on their quality and determine optimal next steps in your content output before proceeding with the next tool call.
 
 ## Tool access (Dynamic Semantic Tool Injection)
-Tools are injected per turn based on relevance. Tools provided in your native tool array with full parameters are ready to call now. Capabilities listed below only by name are NOT yet loaded — you must call request_tools with a description before you can use them. Calling an unloaded tool directly will be blocked.
-
-Available capabilities:
-${summaryPool}
+${buildToolAccessSection(summaryPool)}
 
 ## Tool usage
 If the user simply says "hi", "hello", or engages in casual conversation where no action is required, DO NOT call any tools. Only call tools when strictly necessary to fulfill the user's request.
@@ -341,7 +373,7 @@ Reference files by absolute path. No filler text before tool calls.`;
         if (!hasSummaryMessage) {
           const summaryMessage = {
             role: 'system',
-            content: `\n\n[CRITICAL GATEWAY INSTRUCTIONS]\nYou are operating through an MCP Gateway that uses Dynamic Semantic Tool Injection. DO NOT hallucinate tool calls. Tools provided in your native tool array with full parameters are ready to call now. Capabilities listed below only by name are NOT yet loaded — YOU MUST FIRST call the 'request_tools' function to explicitly fetch a schema before attempting to use it.\n\nAvailable capabilities:\n${summaryPool}`
+            content: buildGatewayAdvisory(summaryPool)
           };
           const firstUserIdx = messages.findIndex((m: any) => m.role === 'user');
           if (firstUserIdx > 0) {

@@ -221,6 +221,15 @@ type ChatResult = {
 
 class QuotaExhausted extends Error {}
 class ContextLost extends Error {}
+/**
+ * The run failed for a reason that is ours or the provider's, not the model's: a server that did
+ * not start, a transport that dropped, every tool call erroring. These are retried and never
+ * scored, because attributing our own breakage to a mode would be the worst kind of wrong number.
+ */
+class InfraFailure extends Error {}
+
+/** Tool-result text that means the plumbing broke rather than the model choosing badly. */
+const INFRA_ERROR = /not connected|transport|ENOENT|ECONNREFUSED|spawn|socket hang up|server closed|Connection closed|MCP error/i;
 
 let consecutiveRateLimits = 0;
 
@@ -398,6 +407,10 @@ type RunOutcome = {
   toolsCalled: string[];
   firstToolCorrect: boolean | null;
   wrongToolCalls: number;
+  toolCallCount: number;
+  toolErrorCount: number;
+  infraErrorCount: number;
+  hitTurnCap: boolean;
   gateBlocks: number;
   discoveryMisses: number;
   catalogSize: number;
@@ -452,6 +465,7 @@ async function runOnce(options: {
   const assistantText: string[] = [];
   let promptTokens = 0, completionTokens = 0, totalTokens = 0;
   let gateBlocks = 0, discoveryMisses = 0;
+  let toolCallCount = 0, toolErrorCount = 0, infraErrorCount = 0;
   let repeatGuard = new Map<string, number>();
   let modelReported = MODEL;
   let injectedPeak = 0;
@@ -494,16 +508,27 @@ async function runOnce(options: {
       try { args = typeof rawArgs === 'string' ? JSON.parse(rawArgs || '{}') : rawArgs; } catch { args = {}; }
 
       let resultText = '';
+      let failed = false;
+      toolCallCount++;
       try {
         const called = await gateway.client.callTool({ name, arguments: args });
         const parts = Array.isArray((called as any).content) ? (called as any).content : [];
         resultText = parts.map((part: any) => (typeof part?.text === 'string' ? part.text : '')).join('\n');
         if (called.isError) {
+          failed = true;
           if (/hallucinat|not injected|not advertised/i.test(resultText)) gateBlocks++;
         }
       } catch (error: any) {
         resultText = `Error: ${error?.message ?? error}`;
+        failed = true;
         if (/hallucinat|not injected|not advertised/i.test(resultText)) gateBlocks++;
+      }
+      if (failed) {
+        toolErrorCount++;
+        // A gate block is the gateway working as designed, not plumbing breaking.
+        if (INFRA_ERROR.test(resultText) && !/hallucinat|not injected|not advertised/i.test(resultText)) {
+          infraErrorCount++;
+        }
       }
 
       if (name === 'request_tools' && /no matching tools found/i.test(resultText)) discoveryMisses++;
@@ -518,6 +543,12 @@ async function runOnce(options: {
   }
 
   const transcript = assistantText.join('\n');
+
+  // Before the verifier gets a say: if the plumbing was broken for most of this run, the outcome
+  // says nothing about the mode. Retry it rather than record a loss the mode did not earn.
+  if (toolCallCount > 0 && infraErrorCount >= Math.ceil(toolCallCount / 2)) {
+    throw new InfraFailure(`${infraErrorCount} of ${toolCallCount} tool calls failed on plumbing`);
+  }
   const verdict = task.verify(options.workspace, transcript, toolsCalled);
 
   // request_tools and batch_call are plumbing, not task tools, so they are not "wrong".
@@ -540,6 +571,10 @@ async function runOnce(options: {
     wrongToolCalls,
     gateBlocks,
     discoveryMisses,
+    toolCallCount,
+    toolErrorCount,
+    infraErrorCount,
+    hitTurnCap: turn >= task.maxTurns,
     catalogSize,
     injectedPeak,
     perTurn,
@@ -631,10 +666,17 @@ async function main() {
           if (error instanceof ContextLost && restarts < MAX_RESTARTS) {
             restarts++;
             log(`  context lost (${error.message}) -> binning transcript, restarting task clean`);
+          } else if (error instanceof InfraFailure && restarts < MAX_RESTARTS) {
+            restarts++;
+            // Ours or the provider's, not the model's. Rerun from clean rather than let it land in
+            // the results as a failure the mode did not earn.
+            log(`  infrastructure failure (${error.message}) -> rerunning, not scoring it`);
           } else {
             const reason = error instanceof ContextLost
               ? `context lost ${restarts + 1} times: ${error.message}`
-              : String(error?.message ?? error);
+              : error instanceof InfraFailure
+                ? `infrastructure failed ${restarts + 1} times: ${error.message}`
+                : String(error?.message ?? error);
             log(`  ABANDONED: ${reason}`);
             const row: Row = { runId, mode, taskId: task.id, band, rep: 1, attempts, restarts, abandoned: true, abandonReason: reason };
             rows.push(row);
@@ -718,14 +760,15 @@ function writeSummary(outDir: string, ctx: {
 
   lines.push('## Tier 2 — tool-calling correctness');
   lines.push('');
-  lines.push('| Arm | First tool correct | Wrong tool calls | Gate blocks | Discovery misses |');
-  lines.push('|---|---|---|---|---|');
+  lines.push('| Arm | First tool correct | Wrong tool calls | Gate blocks | Discovery misses | Tool calls | Tool errors | Infra errors | Hit turn cap |');
+  lines.push('|---|---|---|---|---|---|---|---|---|');
   for (const mode of MODES) {
     const mine = done.filter(r => r.mode === mode);
-    if (mine.length === 0) { lines.push(`| ${MODE_LABEL[mode]} | — | — | — | — |`); continue; }
+    if (mine.length === 0) { lines.push(`| ${MODE_LABEL[mode]} | — | — | — | — | — | — | — | — |`); continue; }
     const scored = mine.filter(r => r.firstToolCorrect !== null && r.firstToolCorrect !== undefined);
     const correct = scored.filter(r => r.firstToolCorrect).length;
-    lines.push(`| ${MODE_LABEL[mode]} | ${correct}/${scored.length} | ${mine.reduce((s, r) => s + (r.wrongToolCalls ?? 0), 0)} | ${mine.reduce((s, r) => s + (r.gateBlocks ?? 0), 0)} | ${mine.reduce((s, r) => s + (r.discoveryMisses ?? 0), 0)} |`);
+    const sum = (pick: (r: Row) => number | undefined) => mine.reduce((acc, r) => acc + (pick(r) ?? 0), 0);
+    lines.push(`| ${MODE_LABEL[mode]} | ${correct}/${scored.length} | ${sum(r => r.wrongToolCalls)} | ${sum(r => r.gateBlocks)} | ${sum(r => r.discoveryMisses)} | ${sum(r => r.toolCallCount)} | ${sum(r => r.toolErrorCount)} | ${sum(r => r.infraErrorCount)} | ${mine.filter(r => r.hitTurnCap).length}/${mine.length} |`);
   }
   lines.push('');
 
@@ -750,6 +793,8 @@ function writeSummary(outDir: string, ctx: {
   lines.push('- Reasoning tokens are included in `completion`, pinned to the same effort for every arm.');
   lines.push('- Money and prompt caching are deliberately not measured. Do not read this as a cost claim.');
   lines.push('- One model. A result here is a result about this model.');
+  lines.push('- **Runs whose plumbing broke were rerun, not scored.** A FAIL below is the model failing the task, not our code or the provider failing. `Infra errors` is the audit trail: non-zero in a completed run means some tool calls failed on plumbing but not enough to invalidate it.');
+  lines.push('- `Hit turn cap` counts runs that used every allowed turn. Those are real failures to finish, but the cap is a parameter, so a high count means the cap is too low rather than a clean result.');
 
   fs.writeFileSync(path.join(outDir, 'summary.md'), lines.join('\n') + '\n');
   fs.writeFileSync(path.join(outDir, 'config.json'), JSON.stringify({

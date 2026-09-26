@@ -1582,6 +1582,38 @@ const tests: TestCase[] = [
     }
   },
   {
+    name: 'llm proxy: the request_tools instruction is only issued when something is undiscovered',
+    async fn() {
+      const { buildToolAccessSection, buildGatewayAdvisory } = await import(srcModule('src/llm-proxy.ts'));
+
+      // Something left to find: the model has to be told how to find it.
+      const withPool = buildToolAccessSection('- sqlite: query a database' + String.fromCharCode(10) + '- git: read history');
+      assert.ok(/must call request_tools/i.test(withPool), 'with unloaded capabilities the instruction is required');
+      assert.ok(withPool.includes('sqlite'), 'the capability list must be carried');
+
+      // Nothing left to find. summaryPool excludes tools already injected, so it is empty whenever
+      // injectAllTools is on, and in Mode 1 whenever retrieval covered the whole catalog. Telling
+      // the model to call request_tools then is false, and it obeys: the observed behaviour was
+      // nine consecutive request_tools calls for tools already in its array, 78k tokens, and a
+      // failed task.
+      for (const empty of ['', '   ', String.fromCharCode(10)]) {
+        const withoutPool = buildToolAccessSection(empty);
+        assert.ok(!/request_tools with a description/i.test(withoutPool),
+          'with nothing undiscovered the model must not be told to search: ' + withoutPool);
+        assert.ok(/do not call request_tools/i.test(withoutPool),
+          'it should be told there is nothing to discover: ' + withoutPool);
+        assert.ok(!withoutPool.includes('Available capabilities'),
+          'an empty capability list must not be printed at all');
+      }
+
+      // The advisory for non-sentinel clients wraps the same section, so it inherits the fix.
+      assert.ok(/do not call request_tools/i.test(buildGatewayAdvisory('')),
+        'the gateway advisory must not demand discovery when there is none to do');
+      assert.ok(/must call request_tools/i.test(buildGatewayAdvisory('- sqlite: query')),
+        'the gateway advisory must still explain discovery when it applies');
+    }
+  },
+  {
     name: 'tui: the gateway cannot write over the TUI, and every log channel is silenced',
     async fn() {
       const savedArgv = process.argv;
