@@ -206,6 +206,43 @@ construction: Mode 1 sees the absence up front, Mode 2 must discover it through 
 Q3 uses **task 3 only**, repeated across all four catalog bands, so the slope is not confounded
 by task difficulty.
 
+## System prompts, and why they differ
+
+The single most important fairness decision here, and the one most likely to be challenged.
+
+`src/llm-proxy.ts` watches for a sentinel first message, `JUSTBETTER_CLI_AGENT`, and replaces it
+with Mode 1's real system prompt: six sections covering path resolution, tool-result validation,
+persistence, reflection, tool access and style. Only the **tool access** section is specific to a
+mode.
+
+The first attempt gave all three arms one neutral prompt of the harness's own. That looked fair
+and was not: Mode 1 lost the instructions describing its own mechanism, and spent six turns
+calling `request_tools` in a loop while ignoring the fifteen tools it had already been handed. It
+failed a task the other two arms passed. That number would have been a harness artifact presented
+as a finding.
+
+Then Mode 3 was given the sentinel too, and inherited the opposite problem: Mode 1's prompt says
+capabilities listed by name must be loaded with `request_tools` first, which is false when every
+tool is already in the array. Mode 3 spent five of six turns discovering tools it already had.
+
+So each arm gets the five mode-agnostic sections **verbatim identical**, and a tool-access section
+describing its own mechanism:
+
+- **Mode 1** sends the sentinel, so the proxy installs the prompt a real Mode 1 user gets.
+- **Mode 2** gets the same text with a tool-access section describing reactive discovery.
+- **Mode 3** gets the same text with a tool-access section saying every tool is already present
+  and there is nothing to discover — because Mode 3 is the naive baseline, representing what an
+  ordinary MCP client does, and telling it about `request_tools` measures the prompt instead.
+
+The difference between the arms is therefore exactly one paragraph, and that paragraph is the
+thing under test. **This is a judgement call, not a fact**, and someone could reasonably argue
+Mode 3 should keep the proxy's prompt since that is what `injectAllTools: true` really ships. The
+run with that variant is on record: Mode 3 failed the trivial task and burned 27.6k tokens doing
+it. Both readings are defensible; this one is stated so it can be disagreed with.
+
+The wording is duplicated from `src/llm-proxy.ts`. If that prompt changes and the harness's copy
+does not, the comparison silently stops being fair.
+
 ## Fairness controls
 
 - **Interleave by task, not by arm.** Task 1 across all three arms, then task 2. Running all of
