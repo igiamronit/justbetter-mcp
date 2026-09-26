@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -100,8 +100,45 @@ const child = spawn(process.execPath, [tsxPath, entry, ...rest], {
     // directory defaults to. Preserved when already set, because the TUI re-enters this
     // same script to spawn the gateway and its own cwd is not the user's.
     JUSTBETTER_INVOCATION_CWD: process.env.JUSTBETTER_INVOCATION_CWD || process.cwd(),
+    // The child watches this pid and leaves when it goes. Passed explicitly rather than read
+    // from ppid so the behaviour only ever applies to a child this launcher started: a gateway
+    // run some other way, by an MCP client for instance, must not start second-guessing
+    // whoever owns it.
+    JUSTBETTER_PARENT_PID: String(process.pid),
   },
 });
+
+// This process is only a launcher: the real work is in the child, and the child must never
+// outlive it. It used to, which is how a gateway from an old session kept holding port 4141
+// and answering the next session's requests with the config it had loaded. On Windows a
+// tree kill is the only thing that also gets the npx wrappers' node processes.
+//
+// A force-kill of this process runs none of this, so the gateway watches for its parent
+// disappearing as well. These handlers are the tidy path; that watchdog is the guarantee.
+const killChildTree = () => {
+  if (!child.pid || child.exitCode !== null) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
+    } else {
+      child.kill("SIGTERM");
+    }
+  } catch {
+    /* already gone */
+  }
+};
+
+process.on("exit", killChildTree);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) {
+  try {
+    process.on(signal, () => {
+      killChildTree();
+      process.exit(0);
+    });
+  } catch {
+    // Not every signal name exists on every platform.
+  }
+}
 
 child.on("error", (err) => {
   console.error(`Failed to start JustBetter: ${err.message}`);

@@ -1425,6 +1425,102 @@ const tests: TestCase[] = [
     }
   },
   {
+    name: 'gateway: a force-killed launcher does not leave the proxy holding the port',
+    async fn() {
+      const { createServer } = await import('node:http');
+      const { spawn: spawnProcess, spawnSync: spawnSyncProcess } = await import('node:child_process');
+
+      const alive = (pid: number) => {
+        try { process.kill(pid, 0); return true; } catch (e: any) { return e?.code === 'EPERM'; }
+      };
+      const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+      // A port nobody is using, found by taking one and letting it go.
+      const probe = createServer(() => {});
+      await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', () => resolve()));
+      const port = (probe.address() as any).port as number;
+      await new Promise<void>(resolve => probe.close(() => resolve()));
+
+      const watchdogConfig = tempFile('watchdog-config.json');
+      writeJson(watchdogConfig, {
+        apiProvider: 'gemini',
+        allowedDirectories: [],
+        upstreamServers: [],
+        llmProxy: { enabled: true, port, host: '127.0.0.1', geminiApiKey: 'sk-not-used-here', model: 'gemini-2.0-flash' },
+        dashboard: { enabled: false }
+      });
+
+      // bin/cli.js is only a launcher: it spawns src/proxy.ts with inherited stdio, so the
+      // gateway that ends up holding the port is a grandchild of whoever ran the command.
+      const launcher = spawnProcess(process.execPath, [
+        path.join(repoRoot, 'bin', 'cli.js'), 'gateway', watchdogConfig
+      ], { stdio: ['pipe', 'pipe', 'pipe'], cwd: os.tmpdir(), env: { ...process.env, SILENCE_LOGS: '1' } });
+
+      let gatewayPid = 0;
+      try {
+        // Wait for the proxy to be listening, and learn the grandchild's pid from /health.
+        const deadline = Date.now() + 40_000;
+        while (Date.now() < deadline && !gatewayPid) {
+          try {
+            const res = await fetch(`http://127.0.0.1:${port}/health`);
+            if (res.ok) {
+              const body: any = await res.json();
+              if (typeof body?.pid === 'number') gatewayPid = body.pid;
+            }
+          } catch {
+            /* not up yet */
+          }
+          if (!gatewayPid) await wait(300);
+        }
+        assert.ok(gatewayPid > 0, 'the gateway should have come up and reported its pid');
+        assert.notEqual(gatewayPid, launcher.pid, 'the proxy runs as a grandchild, not the launcher itself');
+
+        // Force-kill only the launcher, which is what the MCP SDK's close() does to it on
+        // Windows -- TerminateProcess, so none of its handlers run and it passes nothing on.
+        // The grandchild keeps the inherited stdio, so its stdin never ends either: nothing
+        // at all tells it that the session that started it has gone. It used to just keep
+        // running, holding this port, and answer the next session's requests with the
+        // provider, key and model it loaded here.
+        if (process.platform === 'win32') {
+          spawnSyncProcess('taskkill', ['/F', '/PID', String(launcher.pid)], { stdio: 'ignore' });
+        } else {
+          process.kill(launcher.pid!, 'SIGKILL');
+        }
+
+        // The watchdog polls every 2s, so allow a few rounds plus the shutdown grace.
+        const gone = Date.now() + 20_000;
+        while (Date.now() < gone && alive(gatewayPid)) await wait(400);
+
+        assert.equal(alive(gatewayPid), false,
+          'the gateway must notice its parent is gone and exit, or it holds the port for ever');
+
+        // And the port has to be free for the next session.
+        let stillAnswering = true;
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/health`);
+          stillAnswering = res.ok;
+        } catch {
+          stillAnswering = false;
+        }
+        assert.equal(stillAnswering, false, 'the LLM proxy port must be released');
+      } finally {
+        // Whatever happened, do not leave either process behind for the next test.
+        for (const pid of [launcher.pid, gatewayPid]) {
+          if (!pid) continue;
+          try {
+            if (process.platform === 'win32') {
+              spawnSyncProcess('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore' });
+            } else {
+              process.kill(pid, 'SIGKILL');
+            }
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+    }
+  },
+  {
     name: 'proxy: a gateway left running on the port is reported, not silently used',
     async fn() {
       const { createServer } = await import('node:http');

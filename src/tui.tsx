@@ -3,6 +3,7 @@ import { render, Box, Static, useInput, useStdout } from 'ink';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import os from 'os';
+import { spawnSync } from 'child_process';
 import {
   smartTruncate, toolContentToText, pruneMessages,
   resolveProxyBase, waitForOwnProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
@@ -139,7 +140,7 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
     if (key.ctrl && input === 'c') {
       // Two presses within two seconds, so a stray Ctrl+C cannot end the session.
       const now = Date.now();
-      if (now - exitArmedRef.current < 2000) process.exit(0);
+      if (now - exitArmedRef.current < 2000) return exitTui(0);
       exitArmedRef.current = now;
       appendEvent({ type: 'system', text: 'Press Ctrl+C again to exit, or type /exit.' });
       return;
@@ -530,7 +531,8 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
 
     if (text.startsWith('/')) {
       if (text === '/exit' || text === '/quit') {
-        process.exit(0);
+        exitTui(0);
+        return;
       }
 
       if (text === '/setup') {
@@ -945,17 +947,41 @@ if (process.env.JUSTBETTER_TUI_NO_AUTOSTART !== '1') {
   });
 }
 
-// Robust cleanup on Windows to ensure orphan processes (like node.exe spawned by npx.cmd) die
-process.on('SIGINT', () => {
-  if (process.platform === 'win32') {
-    import('child_process').then(({ execSync }) => {
-      try {
-        execSync(`taskkill /F /T /PID ${process.pid}`);
-      } catch (e) {
-        process.exit(0);
-      }
-    });
-  } else {
-    process.exit(0);
+/**
+ * The single way this process leaves.
+ *
+ * /exit and a double Ctrl+C both used to call process.exit(0) straight out, which closed
+ * nothing: the gateway child stayed up, kept the LLM proxy port, and served the next session
+ * with the config it had loaded. Closing the client first is the tidy path -- and it is only
+ * a courtesy, because the gateway also watches for this process disappearing, which is what
+ * covers a force-kill or a closed terminal window where nothing here gets to run.
+ */
+export function exitTui(code: number = 0): void {
+  const client = gatewayClient;
+  gatewayClient = null;
+
+  const leave = () => {
+    if (process.platform === 'win32') {
+      // Also gets the npx wrappers' node processes, which a plain exit leaves behind.
+      try { spawnSync('taskkill', ['/F', '/T', '/PID', String(process.pid)], { stdio: 'ignore' }); } catch { /* fall through */ }
+    }
+    process.exit(code);
+  };
+
+  if (!client) return leave();
+
+  // Never hang on the handshake: the watchdog in the gateway is the backstop.
+  const fallback = setTimeout(leave, 1500);
+  void client.close().catch(() => {}).finally(() => {
+    clearTimeout(fallback);
+    leave();
+  });
+}
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] as const) {
+  try {
+    process.on(signal, () => exitTui(0));
+  } catch {
+    // Not every signal name exists on every platform.
   }
-});
+}

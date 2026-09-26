@@ -9,6 +9,18 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **The gateway could outlive the session that started it.** Four things allowed it. The TUI's
+  `/exit` and double Ctrl+C called `process.exit(0)` without closing the gateway client at all.
+  `bin/cli.js`, which is only a launcher, had no cleanup, so killing it left the gateway it had
+  spawned with inherited stdio still running. The gateway's own shutdown awaited every upstream
+  close with no bound, so one that never resolved -- an npx wrapper on Windows that ignores
+  SIGTERM is enough -- kept the process alive indefinitely, still holding the LLM proxy port.
+  And nothing could tell the gateway its session had gone: a force-kill of the launcher runs no
+  handlers, and its stdin is the TUI's pipe, which stays open across a gateway restart. Now the
+  TUI closes the gateway on every exit path, the launcher takes its child's whole process tree
+  with it, shutdown exits on a deadline, and the gateway leaves when the launcher that started
+  it disappears. The last one is opt-in through an environment variable the launcher sets, so a
+  gateway run by an MCP client is never second-guessed.
 - **A gateway left running from an earlier session silently served every request.** The proxy
   logs a warning when its port is taken and then carries on without one, the warning went to
   a console channel the TUI silences, and `waitForProxy` only asked whether *anything*

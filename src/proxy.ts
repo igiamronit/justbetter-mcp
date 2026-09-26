@@ -2,6 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import path from "path";
+import { spawnSync } from "child_process";
 import { loadConfig, isPlaceholderApiKey } from "./config.js";
 import type { Config } from "./config.js";
 import { searchTools, markToolInjected, getToolByName } from "./catalog.js";
@@ -30,6 +31,40 @@ if (process.env.SILENCE_LOGS === "1") {
   console.warn = () => {};
   console.info = () => {};
   console.debug = () => {};
+}
+
+/** How long a shutdown may take before this process leaves anyway. */
+const SHUTDOWN_GRACE_MS = 3000;
+/** How often to check that the process that started this one still exists. */
+const PARENT_WATCH_MS = 2000;
+
+/** Whether a pid still exists. Signal 0 tests for the process without touching it. */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    // EPERM means it exists but belongs to someone else, which still counts as alive.
+    return e?.code === 'EPERM';
+  }
+}
+
+/**
+ * Leaves, and takes the upstream servers with it.
+ *
+ * The bundled servers are started through npx, which on Windows means a cmd.exe wrapper
+ * around a node process; killing the wrapper leaves the node process behind. Those strays
+ * are what pile up over a few sessions, so the whole tree goes at once.
+ */
+function hardExit(): void {
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/F', '/T', '/PID', String(process.pid)], { stdio: 'ignore' });
+    } catch {
+      /* fall through to exit */
+    }
+  }
+  process.exit(0);
 }
 
 const REQUEST_TOOLS_MCP_SCHEMA = {
@@ -385,22 +420,55 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.error("\n[Proxy] Shutting down gracefully...");
-    try { await server.close(); } catch (e) {}
-    if (dashboardServer) dashboardServer.close();
-    if (llmProxyServer) llmProxyServer.close();
-    
-    // Close upstream clients (which terminates their child processes via the SDK)
-    for (const u of activeUpstreams) {
-      try { await u.client.close(); } catch (e) {}
+
+    // Exit on a deadline whatever happens below. Awaiting every upstream close with no bound
+    // meant one that never resolved -- an npx wrapper on Windows that ignores SIGTERM is
+    // enough -- kept this process alive for good, still holding the LLM proxy port and still
+    // answering as though it were the current session's gateway.
+    const deadline = setTimeout(hardExit, SHUTDOWN_GRACE_MS);
+    try {
+      try { await server.close(); } catch (e) {}
+      if (dashboardServer) dashboardServer.close();
+      if (llmProxyServer) llmProxyServer.close();
+
+      // Close upstream clients (which terminates their child processes via the SDK)
+      for (const u of activeUpstreams) {
+        try { await u.client.close(); } catch (e) {}
+      }
+    } finally {
+      clearTimeout(deadline);
+      hardExit();
     }
-    
-    process.exit(0);
   };
 
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
   process.stdin.on('close', cleanup);
   process.stdin.on('end', cleanup);
+
+  // Orphan watchdog.
+  //
+  // This process is a grandchild: the TUI spawns bin/cli.js, which spawns this with inherited
+  // stdio. Two things follow from that. Killing the middle process on Windows is a
+  // TerminateProcess, so none of its handlers run and it cannot pass anything on. And because
+  // the stdio here is the TUI's own pipe, a gateway restart leaves that pipe open -- the TUI
+  // is still alive -- so stdin never ends and none of the handlers above ever fire. The result
+  // was a gateway that outlived the session that started it, kept port 4141, and served the
+  // next session with the provider, key and model it had loaded hours earlier.
+  //
+  // Watching the parent covers all of it, including a force-kill and a closed terminal window,
+  // neither of which delivers anything that could be handled.
+  // Only the launcher sets this, so a gateway started any other way -- by an MCP client, or
+  // by hand -- is left alone. Guessing from ppid would mean deciding to exit on the strength
+  // of a process tree this code knows nothing about.
+  const parentPid = Number(process.env.JUSTBETTER_PARENT_PID ?? 0);
+  if (parentPid > 1) {
+    const watch = setInterval(() => {
+      if (!isProcessAlive(parentPid)) void cleanup();
+    }, PARENT_WATCH_MS);
+    // No reason for the watchdog itself to hold the process open.
+    watch.unref();
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
