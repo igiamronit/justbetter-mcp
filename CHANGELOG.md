@@ -9,6 +9,15 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **`/setup` accepted a model that does not exist.** The wizard checked the API key against
+  the provider but never the model name, so a typo like `gemini-3.8-flash` saved cleanly,
+  restarted the gateway, and then failed every message with an opaque
+  `400 Invalid model` -- long after the setup that caused it. The key check already calls the
+  provider's `/models` endpoint, which returns the list of valid names, and that list was
+  being thrown away. It is now used: the model step shows what the provider offers, and a
+  name it does not have is refused before anything is saved. `/config set model` checks the
+  same way. An unreachable provider still saves the value unverified, so being offline does
+  not block configuration.
 - **The gateway could outlive the session that started it.** Four things allowed it. The TUI's
   `/exit` and double Ctrl+C called `process.exit(0)` without closing the gateway client at all.
   `bin/cli.js`, which is only a launcher, had no cleanup, so killing it left the gateway it had
@@ -39,15 +48,6 @@ format and CLI surface may change between minor versions.
 - A failed assertion in the setup-wizard test left its ink instance mounted, which broke every
   later test that renders the app -- one real failure looked like eight. The mounts are now
   torn down in a `finally`.
-- **`/setup` accepted a model that does not exist.** The wizard checked the API key against
-  the provider but never the model name, so a typo like `gemini-3.8-flash` saved cleanly,
-  restarted the gateway, and then failed every message with an opaque
-  `400 Invalid model` -- long after the setup that caused it. The key check already calls the
-  provider's `/models` endpoint, which returns the list of valid names, and that list was
-  being thrown away. It is now used: the model step shows what the provider offers, and a
-  name it does not have is refused before anything is saved. `/config set model` checks the
-  same way. An unreachable provider still saves the value unverified, so being offline does
-  not block configuration.
 
 ## [0.4.0] — 2026-09-26
 
