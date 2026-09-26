@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 This project uses [Semantic Versioning](https://semver.org/). While on `0.x`, the config
 format and CLI surface may change between minor versions.
 
-## [Unreleased]
+## [0.4.0] — 2026-09-26
 
 ### Fixed
 
