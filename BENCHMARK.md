@@ -12,8 +12,7 @@ results justify them.
 prompts, Mode 1 vs Mode 2 vs Mode 3 vs OpenCode. Two prompts and one model is enough to show a
 direction. It is not enough to defend a claim, because it answers one question — "which arm used
 fewer tokens on these two prompts" — and a reader can reasonably ask whether that survives a
-different model, a bigger tool catalog, a longer conversation, or a provider that prices output
-tokens at five times input.
+different model, a bigger tool catalog, or a longer conversation.
 
 The goal here is a result that holds up to those questions. **Token efficiency is the primary
 measurement.** Tool-calling correctness is second, because an arm that saves tokens by calling

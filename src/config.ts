@@ -15,6 +15,23 @@ export const CORE_PINNED_TOOLS = [
 export const PROVIDER_BASES: Record<string, string> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
   mistral: "https://api.mistral.ai/v1",
+  // Ollama Cloud's OpenAI-compatible surface. Model ids carry no ":cloud" suffix here even
+  // though the library pages show one.
+  ollama: "https://ollama.com/v1",
+};
+
+/** Which config field holds each provider's key. */
+export const PROVIDER_KEY_FIELDS: Record<string, string> = {
+  gemini: "geminiApiKey",
+  mistral: "mistralApiKey",
+  ollama: "ollamaApiKey",
+};
+
+/** Which environment variables each provider's key may come from. */
+const PROVIDER_ENV_KEYS: Record<string, string[]> = {
+  gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+  ollama: ["OLLAMA_API_KEY"],
 };
 
 export function getProviderBase(provider: string): string {
@@ -32,6 +49,9 @@ export const LlmProxySchema = z.object({
   realApiKey: z.string().optional(),
   geminiApiKey: z.string().optional(),
   mistralApiKey: z.string().optional(),
+  // Absent from the schema until now, and zod strips unknown keys -- so a key written here was
+  // silently discarded at load time, which is half of why it never did anything.
+  ollamaApiKey: z.string().optional(),
   model: z.string().optional(),
 });
 
@@ -44,7 +64,7 @@ export const DashboardSchema = z.object({
 export const ConfigSchema = z.object({
   semanticPromptInjection: z.boolean().default(true),
   injectAllTools: z.boolean().default(false),
-  apiProvider: z.enum(["gemini", "mistral"]).default("gemini"),
+  apiProvider: z.enum(["gemini", "mistral", "ollama"]).default("gemini"),
   // Folders the agent is allowed to touch. Substituted into upstream server args
   // wherever "." or "${JUSTBETTER_WORKSPACE}" appears -- see resolveServerArgs.
   // Empty means "the directory the CLI was launched from".
@@ -102,19 +122,15 @@ export function getEffectiveApiKey(config: Config): string {
   const provider = config.apiProvider || "gemini";
   const llmConfig = config.llmProxy;
 
-  const fromConfig = provider === "gemini"
-    ? (llmConfig?.geminiApiKey || llmConfig?.realApiKey)
-    : (llmConfig?.mistralApiKey || llmConfig?.realApiKey);
+  const field = PROVIDER_KEY_FIELDS[provider] ?? PROVIDER_KEY_FIELDS.gemini!;
+  const fromConfig = (llmConfig as any)?.[field] || llmConfig?.realApiKey;
   if (fromConfig) return fromConfig;
 
-  const envKey = provider === "gemini"
-    ? (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
-    : process.env.MISTRAL_API_KEY;
-  if (envKey) return envKey;
+  for (const name of PROVIDER_ENV_KEYS[provider] ?? []) {
+    if (process.env[name]) return process.env[name]!;
+  }
 
-  return getGlobalSecret(provider === "gemini" ? "geminiApiKey" : "mistralApiKey")
-    || getGlobalSecret("realApiKey")
-    || "";
+  return getGlobalSecret(field) || getGlobalSecret("realApiKey") || "";
 }
 
 /**
