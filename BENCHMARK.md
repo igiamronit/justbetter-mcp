@@ -52,31 +52,23 @@ at `ADVERTISED_LIMIT = 24` with oldest-first eviction. Whether that accumulation
 repeated injection on long tasks is exactly the README's "long-running tasks" claim, expressed in
 tokens instead of adjectives.
 
-**Q5. How does the cost split between prompt and completion?**
-Both are already logged separately. This matters because the two are not priced the same —
-output typically costs three to five times input. Mode 2 spends **completion** tokens reasoning
-about which tool to fetch; Mode 1 spends **prompt** tokens on injection. So an arm can win on raw
-token count and lose on money. If that happens it is the most interesting result in the whole
-exercise, and it is invisible to anyone who only reports totals.
+**Q5. Where do the tokens go — prompt or completion?**
+Both are already logged separately. Not a pricing question: a breakdown that explains *why* an
+arm is expensive. Mode 1 spends its tokens on the **prompt** side, injecting schemas. Mode 2
+spends them on the **completion** side, reasoning about which tool to fetch. A total on its own
+says which arm cost more; the split says what it bought.
 
-**Q6. What does it cost in money?**
-Apply published per-token prices to Q5's split, for the benchmark model and for Gemini and
-Mistral as reference points. Report the price table used and the date, because prices move and a
-cost claim without them is unfalsifiable.
+This matters more than expected on this model. The probe below returned 100 completion tokens
+for a single small tool call, which is far more than the call itself needs — Nemotron 3 emits
+reasoning, and it is counted in `completion_tokens`. So Mode 2's "think about which tool to
+search for" step is not a rounding error here, it is the thing being paid for. Which is
+precisely the mechanism README item 1 claims Mode 1 avoids.
 
-**Q7. How many tokens were spent on tools that were never called?**
-`tools_injected` is already logged per turn. Compare against the tools actually invoked, and
-price the difference. This converts retrieval precision into the same unit as everything else,
-and it is the cleanest single number for "is the semantic search any good".
-
-**Q8 (conditional). Does prompt caching change the answer?**
-Mode 3's giant prompt is nearly static across turns and may cache extremely well; Mode 1's
-injection changes every turn and may cache badly. If that holds, Mode 3's effective cost is much
-lower than its token count suggests. This is only measurable if the provider reports cached
-tokens. Ollama's OpenAI-compatibility page documents `stream_options.include_usage` but does not
-document the response schema, so **whether `usage` exists at all is a preflight check, and cached
-tokens are a maybe.** If they are not reported, this question is recorded as an unmeasured
-limitation rather than guessed at.
+**Not measured: money, and prompt caching.**
+Caching is left on — nothing disables it — but the report gives raw token counts and does not
+convert them to currency or account for cache hits. Both add a layer of provider-specific
+pricing detail that moves independently of the thing under test, and neither is needed to answer
+"which arm uses fewer tokens". The probe confirms `usage` carries no cached-token field anyway.
 
 ### Tier 2 — Tool-calling correctness
 
@@ -142,6 +134,20 @@ Verified against Ollama's own documentation, not aggregator sites:
   so this costs nothing today, and the preflight asserts it stays true
 - Free tier: **one concurrent request**, starter credits, usage resets **monthly from the signup
   date**, metered by **GPU time rather than tokens**, and rate limits are **not published**
+
+**Probe results** (run against the live API before committing to this design):
+
+- `GET /v1/models` returns 200 and lists 17 models. The Nemotron ids are exactly
+  `nemotron-3-nano:30b`, `nemotron-3-super` and `nemotron-3-ultra` — **no `:cloud` suffix**, which
+  the library pages imply and which would have failed silently.
+- **`usage` is present**, and it is real: `{"prompt_tokens":313,"completion_tokens":100,
+  "total_tokens":413}`. The primary tier measures provider-reported counts, not tokenizer
+  estimates. This was the one fact the whole benchmark rested on.
+- `usage` carries **no cached-token field**, so caching could not have been measured here anyway.
+- **Tool calling works.** `nemotron-3-super` emitted one well-formed `tool_calls` entry naming the
+  right function with valid JSON arguments, first try, at temperature 0.
+- Responses include `system_fingerprint` and echo `model`, both of which the harness records so a
+  provider-side change mid-run is detectable.
 
 Consequences: everything runs strictly serial; the budget cannot be computed up front, only
 measured and extrapolated; and exhausting the quota costs weeks, so resuming without losing
@@ -209,6 +215,11 @@ by task difficulty.
 - **Identical decoding** across arms: same temperature (0 where honoured), same seed where
   supported, same `maxTurns`, same system prompt except the mode-specific injection. Every
   parameter recorded.
+- **Reasoning effort pinned and identical.** Nemotron 3 emits reasoning into
+  `completion_tokens` -- the probe spent 100 of them on one small tool call -- and Ollama accepts
+  `reasoning` and `reasoning_effort` as request fields. Left unset, the amount of thinking can
+  drift between arms and quietly become the finding. It is set explicitly, to the same value
+  everywhere, and recorded.
 - **One agentic loop, three tool sources.** The loop must be shared code; only where the `tools`
   array comes from may differ. Three loops would measure the loops.
 - **Fresh workspace per run**, built from the fixture, deleted after.
@@ -278,7 +289,7 @@ Gated, because the quota cannot be predicted.
 time and turns per arm, then extrapolates B and C and stops for approval.
 
 **Tier B — core.** 8 tasks × 3 arms × 1 rep = **24 runs**, at the ~50-tool band. Answers Q1, Q2,
-Q5, Q6, Q7 and all of Tier 2 and Tier 3. One repetition means no variance, so Tier B's output is
+Q5, Q7 and all of Tier 2 and Tier 3. One repetition means no variance, so Tier B's output is
 **directional** and must be labelled so.
 
 **Tier C — scaling.** Task 3 × 3 arms × 4 catalog bands = **12 runs**. Answers Q3. Cheap relative
@@ -300,15 +311,17 @@ Written to `benchmark/results/<timestamp>/`:
 - `raw.jsonl` — one line per run, appended live
 - `turns.csv` — the extended token log, one row per turn, the substrate for Q2, Q4 and Q7
 - `summary.md` — what ran, what did not, retries and restarts, **then** the comparison
-- `config.json` — model and reported version, catalog snapshot per band, task-set hash, git SHA,
-  price table with its date
+- `config.json` — model and reported `system_fingerprint`, catalog snapshot per band, task-set
+  hash, git SHA, and every decoding parameter including reasoning effort
 
 ## Threats to validity
 
 Recorded here so the write-up cannot quietly omit them.
 
 - **One model.** A result on `nemotron-3-super` is a result about that model. The published
-  numbers used `mistral-large-latest`; where the two disagree, that is a finding, not an error.
+  README numbers used `mistral-large-latest`, so the two sets are not directly comparable and
+  neither invalidates the other. Re-running on Mistral was considered and dropped: its free tier
+  is too degraded to produce clean runs.
 - **Eight tasks is small.** Enough for direction, not for significance.
 - **We wrote the tasks and we hold the hypothesis.** Task 5's unmatched keyword and task 2's
   distractors are choices that could favour retrieval-based arms. The task set and its hash ship
@@ -317,5 +330,9 @@ Recorded here so the write-up cannot quietly omit them.
   eliminates it.
 - **Mode 2's harness is not a real MCP client.** Claude Desktop and Cursor bring their own system
   prompts and loops. This measures the mode, not those products.
-- **Caching may be unmeasurable here**, and if so Mode 3's real-world cost could be materially
-  lower than its token count implies. That has to be stated wherever Mode 3's numbers appear.
+- **Caching is deliberately not accounted for.** Mode 3's prompt barely changes between turns
+  and will cache better than Mode 1's, so Mode 3's real-world *cost* is lower than its token
+  count implies. The report measures tokens, not money, and must not be read as a cost claim.
+- **Reasoning tokens are part of the totals.** They are what Mode 2 spends to decide what to
+  fetch, so excluding them would hide the mechanism under test -- but it does mean these totals
+  are not comparable to a non-reasoning model's.
