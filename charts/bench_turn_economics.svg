@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 410" width="860" height="410" role="img">
+<style>.bg { fill: #ffffff; }
+.title { font: 600 17px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.sub { font: 400 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.axis { font: 400 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.lbl { font: 600 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.val { font: 700 13px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.small { font: 400 10.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.grid { stroke: #d1d9e0; stroke-width: 1; }
+.axisline { stroke: #59636e; stroke-width: 1; }
+.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; }
+.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; }
+.medmark { stroke: #1f2328; stroke-width: 2; stroke-dasharray: 3 2; }
+@media (prefers-color-scheme: dark) {
+  .bg { fill: #0d1117; }
+  .title, .lbl, .val { fill: #e6edf3; }
+  .sub, .axis, .small { fill: #9198a1; }
+  .grid { stroke: #2f3742; }
+  .axisline { stroke: #9198a1; }
+  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; }
+  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; }
+  .medmark { stroke: #e6edf3; }
+}</style>
+<rect class="bg" width="860" height="410" rx="6"/>
+<text class="title" x="30.0" y="34.0">Why Mode 1 is cheaper: fewer turns, not a cheaper turn</text>
+<text class="sub" x="30.0" y="56.0">Mode 1 and Mode 2 pay nearly the same price per turn. The gap between them is turn count alone.</text>
+<text class="sub" x="30.0" y="75.0">Cost is about 97% prompt in every arm, so each extra turn re-sends the whole transcript and the whole tool surface.</text>
+<text class="lbl" x="30.0" y="108.0">Tokens per turn</text>
+<line class="grid" x1="76.0" y1="330.0" x2="384.0" y2="330.0"/><text class="axis" x="68.0" y="334.0" text-anchor="end">0</text><line class="grid" x1="76.0" y1="279.0" x2="384.0" y2="279.0"/><text class="axis" x="68.0" y="283.0" text-anchor="end">2,000</text><line class="grid" x1="76.0" y1="228.0" x2="384.0" y2="228.0"/><text class="axis" x="68.0" y="232.0" text-anchor="end">4,000</text><line class="grid" x1="76.0" y1="177.0" x2="384.0" y2="177.0"/><text class="axis" x="68.0" y="181.0" text-anchor="end">6,000</text><line class="grid" x1="76.0" y1="126.0" x2="384.0" y2="126.0"/><text class="axis" x="68.0" y="130.0" text-anchor="end">8,000</text>
+<line class="axisline" x1="76.0" y1="330.0" x2="384.0" y2="330.0"/>
+<rect class="m1" x="98.3" y="214.2" width="58.0" height="115.8" rx="2"/>
+<text class="val" x="127.3" y="204.2" text-anchor="middle">4,542</text>
+<text class="lbl" x="127.3" y="353.0" text-anchor="middle">Mode 1</text>
+<rect class="m2" x="201.0" y="208.8" width="58.0" height="121.2" rx="2"/>
+<text class="val" x="230.0" y="198.8" text-anchor="middle">4,752</text>
+<text class="lbl" x="230.0" y="353.0" text-anchor="middle">Mode 2</text>
+<rect class="m3" x="303.7" y="173.7" width="58.0" height="156.3" rx="2"/>
+<text class="val" x="332.7" y="163.7" text-anchor="middle">6,129</text>
+<text class="lbl" x="332.7" y="353.0" text-anchor="middle">Mode 3</text>
+<text class="small" x="30.0" y="380.0">Mode 1 vs Mode 2: 4.6% apart. Mode 3 pays 35% more per turn for its 26-tool surface.</text>
+<text class="lbl" x="460.0" y="108.0">Turns per run (mean)</text>
+<line class="grid" x1="506.0" y1="330.0" x2="814.0" y2="330.0"/><text class="axis" x="498.0" y="334.0" text-anchor="end">0.0</text><line class="grid" x1="506.0" y1="279.0" x2="814.0" y2="279.0"/><text class="axis" x="498.0" y="283.0" text-anchor="end">2.5</text><line class="grid" x1="506.0" y1="228.0" x2="814.0" y2="228.0"/><text class="axis" x="498.0" y="232.0" text-anchor="end">5.0</text><line class="grid" x1="506.0" y1="177.0" x2="814.0" y2="177.0"/><text class="axis" x="498.0" y="181.0" text-anchor="end">7.5</text><line class="grid" x1="506.0" y1="126.0" x2="814.0" y2="126.0"/><text class="axis" x="498.0" y="130.0" text-anchor="end">10.0</text>
+<line class="axisline" x1="506.0" y1="330.0" x2="814.0" y2="330.0"/>
+<rect class="m1" x="528.3" y="207.6" width="58.0" height="122.4" rx="2"/>
+<text class="val" x="557.3" y="197.6" text-anchor="middle">6.0</text>
+<text class="lbl" x="557.3" y="353.0" text-anchor="middle">Mode 1</text>
+<rect class="m2" x="631.0" y="159.2" width="58.0" height="170.8" rx="2"/>
+<text class="val" x="660.0" y="149.2" text-anchor="middle">8.4</text>
+<text class="lbl" x="660.0" y="353.0" text-anchor="middle">Mode 2</text>
+<rect class="m3" x="733.7" y="171.9" width="58.0" height="158.1" rx="2"/>
+<text class="val" x="762.7" y="161.9" text-anchor="middle">7.8</text>
+<text class="lbl" x="762.7" y="353.0" text-anchor="middle">Mode 3</text>
+<text class="small" x="460.0" y="380.0">Mode 1 finishes in 28% fewer turns than Mode 2. That is the whole advantage.</text>
+</svg>
