@@ -21,6 +21,9 @@ import {
 import type { UiEvent } from './tui/events.js';
 import { renderEventsToLines, renderEventLines, findLatestExpandableEventId } from './tui/render.js';
 import { matchingCommands } from './tui/commands.js';
+
+/** How long one model request may take before the turn is stopped and explained. */
+const MODEL_REQUEST_TIMEOUT_MS = 120_000;
 import { CommandMenu, InputBox, HintLine, WorkingLine, Lines } from './tui/components.js';
 import { themeFromEnvironment } from './tui/theme.js';
 import { SetupWizard } from './tui/wizard.js';
@@ -47,6 +50,10 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
   const abortRef = React.useRef<AbortController | null>(null);
   const exitArmedRef = React.useRef<number>(0);
   const wasConnectedRef = React.useRef(false);
+  // isBusy is state, so every handler created by a render reads the value from that render.
+  // Two submits arriving before React re-renders would both see "not busy" and both start a
+  // turn, appending the same message twice. A ref is updated immediately, so it cannot.
+  const busyRef = React.useRef(false);
   const [phase, setPhase] = useState<'setup' | 'chat'>(configNeedsSetup() ? 'setup' : 'chat');
   // A first run has no working config to fall back to, so the wizard is not escapable
   // there. Reached through /setup, it is.
@@ -105,6 +112,20 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
   };
 
   useInput((input, key) => {
+    // Enter is a carriage return on most terminals, and ink sets key.return for that, which
+    // is what ink-text-input submits on. Some terminals send a line feed or CRLF instead;
+    // ink parses those as a key it calls "enter" and exposes no flag for, so the text input
+    // never saw a submit and the typed line just sat in the box doing nothing. Handled here
+    // because these arrive as a single keypress with no flags, so there is no double submit.
+    if (!key.return && (input === String.fromCharCode(10) || input === String.fromCharCode(13) + String.fromCharCode(10))) {
+      const pending = draft.trim();
+      if (pending) {
+        setDraft('');
+        void handleSubmit(pending);
+      }
+      return;
+    }
+
     // Esc aborts the turn in flight. The transcript keeps whatever already happened --
     // an interrupted run that erased its own output would be worse than no interrupt.
     if (key.escape) {
@@ -212,6 +233,9 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
     let history = [...initialHistory];
     let turns = 0;
     let requestToolsMisses = 0;
+    // Set by the stall timer below so the catch can tell a timeout from an Esc, since both
+    // arrive as an AbortError.
+    let stalled = false;
 
     if (!mcpClient) {
       // Unreachable from handleSubmit, which checks first. Kept explicit because the
@@ -243,17 +267,36 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
           headers['X-JustBetter-Token'] = cliConfig.llmProxy.authToken;
         }
 
-        const response = await fetch(proxyUrl(), {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            model: cliConfig.llmProxy?.model || 'mistral-large-latest',
-            messages: prunedHistory
-          }),
-          // Without this, Esc during a slow model call would only take effect once the
-          // response had already arrived, which does not read as an interrupt.
-          ...(signal ? { signal } : {})
-        });
+        // A request that never answers used to spin the clock forever with nothing on
+        // screen: waitForProxy only checks that something is listening on the port, so an
+        // orphaned gateway holding it will accept the connection and never reply. Bound the
+        // wait and say so. AbortSignal.any would be neater but needs Node 20, and the
+        // package supports 18.
+        const requestController = new AbortController();
+        const abortRequest = () => requestController.abort();
+        signal?.addEventListener('abort', abortRequest);
+        const stallTimer = setTimeout(() => {
+          stalled = true;
+          requestController.abort();
+        }, MODEL_REQUEST_TIMEOUT_MS);
+
+        let response: Response;
+        try {
+          response = await fetch(proxyUrl(), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: cliConfig.llmProxy?.model || 'mistral-large-latest',
+              messages: prunedHistory
+            }),
+            // Without this, Esc during a slow model call would only take effect once the
+            // response had already arrived, which does not read as an interrupt.
+            signal: requestController.signal
+          });
+        } finally {
+          clearTimeout(stallTimer);
+          signal?.removeEventListener('abort', abortRequest);
+        }
 
         if (!response.ok) {
           const err = await response.text();
@@ -411,6 +454,13 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
           setLlmMessages(history);
         }
       } catch (e: any) {
+        if (stalled) {
+          appendEvent({ turnId, type: 'system', isError: true, text:
+            `The model did not answer within ${Math.round(MODEL_REQUEST_TIMEOUT_MS / 1000)}s, so the turn was stopped.` });
+          appendEvent({ turnId, type: 'system', text:
+            'A gateway left running from an earlier session can hold the port and never reply. Try /config reload, or restart the CLI.' });
+          break;
+        }
         // AbortError is the user pressing Esc, which has already been reported.
         if (e?.name === 'AbortError' || signal?.aborted) {
           appendEvent({ turnId, type: 'system', text: 'Interrupted.' });
@@ -604,7 +654,7 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
       return;
     }
 
-    if (isBusy) return;
+    if (isBusy || busyRef.current) return;
 
     // The gateway is a child process that takes a few seconds to come up -- longer on a
     // first run, which downloads the bundled servers. Until it does there is nothing to
@@ -623,6 +673,7 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
 
     setHistory(prev => (prev[prev.length - 1] === text ? prev : [...prev, text]));
     setHistoryIndex(null);
+    busyRef.current = true;
     setIsBusy(true);
     setInterruptedAt(0);
     const controller = new AbortController();
@@ -630,10 +681,14 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
     appendEvent({ turnId, type: 'user', text });
     setLlmMessages(nextHistory);
 
-    await runAgenticLoop(nextHistory, turnId, controller.signal);
-    abortRef.current = null;
-    setActivity(null);
-    setIsBusy(false);
+    try {
+      await runAgenticLoop(nextHistory, turnId, controller.signal);
+    } finally {
+      abortRef.current = null;
+      busyRef.current = false;
+      setActivity(null);
+      setIsBusy(false);
+    }
   };
 
   const provider = cliConfig.apiProvider || 'gemini';

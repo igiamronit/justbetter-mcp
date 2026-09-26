@@ -4,7 +4,7 @@ import TextInput from 'ink-text-input';
 import { verifyApiKey } from '../config.js';
 import { invocationCwd } from '../paths.js';
 import {
-  cliConfig, configPath, persistConfig, currentWorkspace, parseWorkspaceInput,
+  cliConfig, configPath, persistConfig, parseWorkspaceInput,
   PROVIDERS, PROVIDER_LABEL, PROVIDER_KEY_FIELD, PROVIDER_DEFAULT_MODEL, PROVIDER_KEY_URL
 } from './session.js';
 import type { Provider } from './session.js';
@@ -88,8 +88,10 @@ export function SetupWizard({ onComplete, onCancel }: {
 
   const submitModel = (value: string) => {
     setModelValue(value.trim() || PROVIDER_DEFAULT_MODEL[provider]);
-    const existing = currentWorkspace();
-    setWorkspaceValue(existing.join(', '));
+    // Prefilled with the folder the CLI was started in, not the one saved last time: a
+    // path left over from another project is never what you want here, and it silently
+    // pointed the agent at someone else's source tree.
+    setWorkspaceValue(invocationCwd());
     setError('');
     setStep('workspace');
   };

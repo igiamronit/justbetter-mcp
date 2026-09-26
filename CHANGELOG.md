@@ -9,6 +9,24 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **`/setup` offered a folder from some other project.** The workspace box was prefilled from
+  `allowedDirectories` in the config, so a path saved by an earlier run came back every time
+  and the folder you were actually standing in was ignored -- which is how an agent ended up
+  writing into a source tree nobody had pointed it at. It now defaults to the directory the
+  CLI was started in.
+- **Enter did nothing on terminals that send a line feed.** ink flags a carriage return as
+  `return`, which is what the text input submits on, but a bare LF or a CRLF is parsed as a
+  key it calls "enter" with no flag exposed for it. On a terminal that sends either, nothing
+  could be submitted at all -- the typed line just sat in the box. All three forms now submit
+  exactly one turn.
+- **A stalled model request span the clock forever.** `waitForProxy` only checks that
+  something is listening on the port, so a gateway left running from an earlier session
+  accepts the connection and never replies. A request now gives up after 120s and says so,
+  including what usually causes it, instead of spinning with nothing on screen.
+- **Two Enters in the same tick could start two turns.** The "already busy" check read React
+  state, which every handler sees as it was at its own render, so submits arriving before the
+  next render all passed it and each appended the same message. The guard is a ref now, so it
+  is true the moment the first one starts.
 - **Messages sent while the gateway was still starting vanished.** The TUI renders and takes
   input immediately, but the gateway is a child process that takes seconds to come up --
   longer on a first run, which downloads the bundled servers. The agentic loop was a

@@ -575,10 +575,15 @@ const tests: TestCase[] = [
 
       const projectDir = tempFile('wizard-project');
       mkdirSync(projectDir, { recursive: true });
+      // A folder saved by an earlier run, in some other project. The wizard used to prefill
+      // the workspace box from the config, so this stale path came back every time and the
+      // folder you were actually standing in was ignored.
+      const staleDir = tempFile('wizard-somewhere-else');
+      mkdirSync(staleDir, { recursive: true });
       const wizardConfig = tempFile('wizard-config.json');
       writeJson(wizardConfig, {
         apiProvider: 'gemini',
-        allowedDirectories: [],
+        allowedDirectories: [staleDir],
         upstreamServers: [],
         llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'YOUR-GEMINI-API-KEY', model: 'gemini-2.0-flash' }
       });
@@ -674,6 +679,8 @@ const tests: TestCase[] = [
         await press(first.stdin, ENTER, 1, 120);
         assert.ok(first.frame().includes('Which folder should the agent'), first.frame());
         assert.ok(first.frame().includes(projectDir), 'the folder must default to where the CLI was launched');
+        assert.ok(!first.frame().includes(staleDir),
+          'the folder saved by an earlier run must not be prefilled: ' + first.frame());
 
         await press(first.stdin, BACKSPACE, projectDir.length + 5, 3);
         first.stdin.write(path.join(tempRoot, 'does-not-exist'));
@@ -1149,6 +1156,81 @@ const tests: TestCase[] = [
           await wait(60);
         }
       } finally {
+        process.argv = savedArgv;
+        delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'tui app: Enter submits once whether the terminal sends CR, LF or CRLF',
+    async fn() {
+      const savedArgv = process.argv;
+      const savedFetch = globalThis.fetch;
+      const enterConfig = tempFile('enter-config.json');
+      writeJson(enterConfig, {
+        apiProvider: 'gemini',
+        upstreamServers: [],
+        llmProxy: { enabled: true, port: 4141, host: '127.0.0.1', geminiApiKey: 'sk-real-key', model: 'gemini-2.0-flash' }
+      });
+      process.argv = [savedArgv[0]!, 'test-harness', enterConfig];
+      process.env.JUSTBETTER_TUI_NO_AUTOSTART = '1';
+
+      // ink sets key.return only for a carriage return. A line feed and a CRLF are parsed as
+      // a key it calls "enter", with no flag exposed for it, so ink-text-input never saw a
+      // submit -- on a terminal that sends either, nothing could be sent at all. One turn
+      // per press is the other half: a second handler firing as well would double-submit.
+      const cases: [string, string][] = [
+        ['CR', String.fromCharCode(13)],
+        ['LF', String.fromCharCode(10)],
+        ['CRLF', String.fromCharCode(13) + String.fromCharCode(10)]
+      ];
+
+      try {
+        const { App } = await import(srcModule('src/tui.tsx'));
+        const { render } = await import('ink');
+        const React = (await import('react')).default;
+        const { PassThrough } = await import('node:stream');
+        const { EventEmitter } = await import('node:events');
+
+        for (const [label, sequence] of cases) {
+          // One POST per started turn, and it never answers, so the count is exact.
+          let turnsStarted = 0;
+          globalThis.fetch = (() => {
+            turnsStarted++;
+            return new Promise(() => { /* the turn stays open; we only count starts */ });
+          }) as any;
+
+          const stdin: any = new PassThrough();
+          stdin.isTTY = true;
+          stdin.setRawMode = () => stdin;
+          stdin.ref = () => undefined;
+          stdin.unref = () => undefined;
+
+          const stdout: any = new EventEmitter();
+          stdout.isTTY = true;
+          stdout.columns = 90;
+          stdout.rows = 30;
+          stdout.write = () => true;
+
+          const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+          const fakeClient: any = { callTool: async () => ({ content: [] }) };
+          const app = render(React.createElement(App, { mcpClient: fakeClient }), {
+            stdin, stdout, exitOnCtrlC: false, patchConsole: false
+          });
+
+          try {
+            await wait(250);
+            for (const character of 'ping') { stdin.write(character); await wait(12); }
+            stdin.write(sequence);
+            await wait(400);
+            assert.equal(turnsStarted, 1, `Enter as ${label} must start exactly one turn`);
+          } finally {
+            app.unmount();
+            await wait(60);
+          }
+        }
+      } finally {
+        globalThis.fetch = savedFetch;
         process.argv = savedArgv;
         delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
       }
