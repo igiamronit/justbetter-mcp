@@ -615,6 +615,9 @@ const tests: TestCase[] = [
 
       const stripAnsi = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
 
+      // Unmounted in the finally below even when an assertion throws.
+      const mounted: any[] = [];
+
       function mountWizard(SetupWizard: any, withCancel: boolean) {
         const stdin: any = new PassThrough();
         stdin.isTTY = true;
@@ -642,6 +645,7 @@ const tests: TestCase[] = [
         const app = render(React.createElement(SetupWizard, props), {
           stdin, stdout, exitOnCtrlC: false, patchConsole: false
         });
+        mounted.push(app);
         return { app, stdin, state, frame: () => stripAnsi(buffer) };
       }
 
@@ -665,7 +669,7 @@ const tests: TestCase[] = [
         assert.ok(/>\s*1\. Google Gemini/.test(first.frame()), 'expected Gemini highlighted by default');
         assert.ok(!first.frame().includes('Esc to cancel'), 'a first run has nothing to cancel back to');
 
-        await press(first.stdin, ENTER, 1, 120);
+        await press(first.stdin, ENTER, 1, 250);
         assert.ok(first.frame().includes('Paste your Google Gemini API key'), first.frame());
 
         first.stdin.write('sk-typo');
@@ -766,6 +770,10 @@ const tests: TestCase[] = [
         third.app.unmount();
         await wait(80);
       } finally {
+        for (const app of mounted) {
+          try { app.unmount(); } catch { /* already gone */ }
+        }
+        await wait(80);
         process.argv = savedArgv;
         globalThis.fetch = savedFetch;
         delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
@@ -1413,6 +1421,67 @@ const tests: TestCase[] = [
         globalThis.fetch = savedFetch;
         process.argv = savedArgv;
         delete process.env.JUSTBETTER_TUI_NO_AUTOSTART;
+      }
+    }
+  },
+  {
+    name: 'proxy: a gateway left running on the port is reported, not silently used',
+    async fn() {
+      const { createServer } = await import('node:http');
+      const { waitForOwnProxy } = await import(srcModule('src/agent-common.ts'));
+
+      // A gateway orphaned by an earlier session: same /health, same service name, but it
+      // loaded a different provider, key and model whenever it started. waitForProxy only
+      // asked whether anything answered, so this was indistinguishable from a fresh start --
+      // the new proxy lost the bind, every request went here, and a config set to Gemini came
+      // back with Mistral's errors under a cheerful "Gateway ready."
+      const orphan = createServer((req, res) => {
+        if (req.url === '/health') {
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({
+            status: 'ok',
+            service: 'justbetter-mcp-llm-proxy',
+            instance: 'a-previous-session',
+            pid: 4242,
+            provider: 'mistral',
+            model: 'mistral-medium-latest',
+            apiBase: 'https://api.mistral.ai/v1'
+          }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+      await new Promise<void>(resolve => orphan.listen(0, '127.0.0.1', () => resolve()));
+      const port = (orphan.address() as any).port as number;
+      const base = `http://127.0.0.1:${port}`;
+
+      try {
+        // Short timeout: the answer is already known, there is no point waiting 20s for it.
+        const foreign = await waitForOwnProxy(base, 'the-instance-we-just-started', 1200);
+        assert.equal(foreign.status, 'foreign',
+          'a proxy that is not the one we started must not be accepted as ours');
+        if (foreign.status === 'foreign') {
+          // These are what make the message actionable: which process to kill, and what it is
+          // actually serving, which is the part that explains the confusing provider errors.
+          assert.equal(foreign.pid, 4242);
+          assert.equal(foreign.provider, 'mistral');
+          assert.equal(foreign.model, 'mistral-medium-latest');
+          assert.equal(foreign.service, 'justbetter-mcp-llm-proxy');
+        }
+
+        // The same endpoint, asked for the token it is actually carrying, is ours.
+        const ours = await waitForOwnProxy(base, 'a-previous-session', 1200);
+        assert.equal(ours.status, 'ours', 'a matching instance token must be accepted');
+        if (ours.status === 'ours') assert.equal(ours.provider, 'mistral');
+
+        // Nothing listening at all is a third, different outcome, and must not be reported as
+        // somebody else's proxy.
+        await new Promise<void>(resolve => orphan.close(() => resolve()));
+        const absent = await waitForOwnProxy(base, 'anything', 700);
+        assert.equal(absent.status, 'absent');
+      } finally {
+        try { orphan.close(); } catch { /* already closed */ }
       }
     }
   },

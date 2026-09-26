@@ -5,7 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import os from 'os';
 import {
   smartTruncate, toolContentToText, pruneMessages,
-  resolveProxyBase, waitForProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
+  resolveProxyBase, waitForOwnProxy, MAX_TOOL_CHARS, MAX_CONTEXT_CHARS
 } from './agent-common.js';
 import { packagePath } from './paths.js';
 import { isPlaceholderApiKey, verifyApiKey } from './config.js';
@@ -196,7 +196,13 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
     onGatewayLog = (line: string) => {
       appendEvent({ type: 'system', detail: true, text: `[gateway] ${line}` });
     };
-    return () => { onGatewayLog = () => {}; };
+    onGatewayError = (message: string) => {
+      appendEvent({ type: 'system', isError: true, text: message });
+    };
+    return () => {
+      onGatewayLog = () => {};
+      onGatewayError = () => {};
+    };
   }, []);
 
   // Said once, on mount, when the gateway is already starting: a first run downloads the
@@ -802,6 +808,8 @@ let gatewayClient: Client | null = null;
 let rerenderApp: () => void = () => {};
 /** Set by the App so the gateway's own output can reach the transcript. */
 let onGatewayLog: (line: string) => void = () => {};
+/** Set by the App so a failure during the very first boot is reported rather than dropped. */
+let onGatewayError: (message: string) => void = () => {};
 
 /**
  * How the gateway child is spawned.
@@ -816,7 +824,7 @@ let onGatewayLog: (line: string) => void = () => {};
  *
  * Exported so a test can assert the stream is captured rather than inherited.
  */
-export function gatewayTransportOptions() {
+export function gatewayTransportOptions(instance: string = '') {
   return {
     command: process.execPath,
     // Go through bin/cli.js rather than invoking tsx directly: it is the single
@@ -827,7 +835,8 @@ export function gatewayTransportOptions() {
     // makes `npm install -g` fail with EBUSY on Windows. Every path passed above is
     // absolute, so there is nothing here that needs a meaningful cwd.
     cwd: os.tmpdir(),
-    env: { ...(process.env as Record<string, string>), SILENCE_LOGS: '1' },
+    // JUSTBETTER_PROXY_INSTANCE is how the parent recognises its own proxy on the port.
+    env: { ...(process.env as Record<string, string>), SILENCE_LOGS: '1', JUSTBETTER_PROXY_INSTANCE: instance },
     stderr: 'pipe' as const
   };
 }
@@ -846,7 +855,8 @@ export async function bootGateway(): Promise<string | null> {
   }
 
   try {
-    const transport = new StdioClientTransport(gatewayTransportOptions());
+    const instance = createId();
+    const transport = new StdioClientTransport(gatewayTransportOptions(instance));
     // The child's diagnostics belong in the transcript, not written over it. Quiet by
     // default because most of it is startup chatter; /verbose brings it back.
     const stderrStream = transport.stderr;
@@ -865,7 +875,29 @@ export async function bootGateway(): Promise<string | null> {
 
     const client = new Client({ name: 'justbetter-tui', version: '1.0.0' }, { capabilities: {} });
     await client.connect(transport);
-    await waitForProxy(resolveProxyBase(cliConfig));
+    // Not "is anything listening" -- "is the thing listening the one we just started". A
+    // gateway orphaned by an earlier session keeps the port, so the new proxy never binds and
+    // every request goes to the old process with its old provider, key and model. That is
+    // what made a config set to Gemini answer with Mistral's errors, with "Gateway ready."
+    // printed above it.
+    const probe = await waitForOwnProxy(resolveProxyBase(cliConfig), instance);
+    if (probe.status === 'foreign') {
+      const port = cliConfig.llmProxy?.port ?? 4141;
+      const whose = probe.service === 'justbetter-mcp-llm-proxy'
+        ? `another justbetter-mcp gateway${probe.pid ? ` (process ${probe.pid})` : ''}`
+        : `another program${probe.pid ? ` (process ${probe.pid})` : ''}`;
+      const serving = probe.provider
+        ? ` It is serving ${probe.provider}${probe.model ? ` / ${probe.model}` : ''}, not your current settings.`
+        : '';
+      try { await client.close(); } catch { /* child already gone */ }
+      return `port ${port} is held by ${whose}, so this session has no proxy of its own.${serving}`
+        + ` Close it (on Windows: taskkill /PID ${probe.pid ?? 0} /F), or set llmProxy.port to a free port.`;
+    }
+    if (probe.status === 'absent') {
+      try { await client.close(); } catch { /* child already gone */ }
+      return `the gateway started but its LLM proxy never answered on port ${cliConfig.llmProxy?.port ?? 4141}.`;
+    }
+
     gatewayClient = client;
     rerenderApp();
     return null;
@@ -894,7 +926,11 @@ async function start() {
   // A config that cannot chat yet goes to the wizard first. Booting now would start
   // the LLM proxy against a placeholder key and fail with a provider-side error.
   if (!configNeedsSetup()) {
-    await bootGateway();
+    // The return value used to be discarded here, so anything that went wrong on the first
+    // boot was silent -- including the port already being held, which is the one failure the
+    // user cannot guess at.
+    const failure = await bootGateway();
+    if (failure) onGatewayError(`Gateway failed to start: ${failure}`);
   }
 
   await waitUntilExit();

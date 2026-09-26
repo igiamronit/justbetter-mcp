@@ -136,9 +136,24 @@ export function startLlmProxy(config: Config) {
   const app = express();
   app.use(express.json({ limit: '10mb' }));
 
-  // Health check
+  // Health check.
+  //
+  // The identity fields are load-bearing. Every instance used to answer with the same two
+  // constants, so a caller could tell that *a* proxy was listening but not *which* one. A
+  // gateway orphaned by an earlier session keeps the port, answers this, and gets handed
+  // every request -- serving whatever provider, key and model it loaded whenever it started.
+  // That is invisible from the outside: a config set to Gemini returns Mistral's errors.
+  // `instance` is a token the parent generates per boot, so the parent can insist on its own.
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'justbetter-mcp-llm-proxy' });
+    res.json({
+      status: 'ok',
+      service: 'justbetter-mcp-llm-proxy',
+      instance: process.env.JUSTBETTER_PROXY_INSTANCE ?? null,
+      pid: process.pid,
+      provider: config.apiProvider || 'gemini',
+      model: llmConfig.model ?? null,
+      apiBase: getEffectiveApiBase(config)
+    });
   });
 
   // Optional shared secret. This proxy forwards every request with the real provider

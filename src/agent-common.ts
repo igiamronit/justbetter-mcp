@@ -72,6 +72,61 @@ export function resolveProxyUrl(cliConfig: any): string {
  * Waits for the proxy's health endpoint instead of sleeping a fixed interval and
  * hoping the HTTP server finished binding.
  */
+/** What answered on the proxy port. */
+export type ProxyProbe =
+  /** Our own instance, the one whose token we passed in. */
+  | { status: 'ours'; provider?: string; model?: string }
+  /** Something else holds the port: another gateway, or an unrelated service. */
+  | { status: 'foreign'; pid?: number; provider?: string; model?: string; apiBase?: string; service?: string }
+  /** Nothing answered before the deadline. */
+  | { status: 'absent' };
+
+/**
+ * Waits for the proxy *we* just started, not merely for something on the port.
+ *
+ * waitForProxy below returns true as soon as any /health answers, which is why a gateway
+ * left running by an earlier session was indistinguishable from a fresh one. The orphan
+ * keeps the port, the new proxy loses the bind, and every request goes to the old process
+ * with the old provider and key -- so a config switched to Gemini kept returning Mistral's
+ * errors and nothing anywhere said why. The caller passes the token it gave its child, and
+ * a reply carrying a different token is reported as somebody else's proxy.
+ */
+export async function waitForOwnProxy(
+  baseUrl: string,
+  instance: string,
+  timeoutMs: number = 20000
+): Promise<ProxyProbe> {
+  const deadline = Date.now() + timeoutMs;
+  let lastForeign: ProxyProbe | null = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      if (res.ok) {
+        const body: any = await res.json().catch(() => ({}));
+        if (body?.instance === instance) {
+          return { status: 'ours', provider: body?.provider, model: body?.model };
+        }
+        // Someone is there but it is not ours. Keep polling in case ours is still binding
+        // and this is a race, but remember what we saw so it can be reported.
+        lastForeign = {
+          status: 'foreign',
+          pid: typeof body?.pid === 'number' ? body.pid : undefined,
+          provider: body?.provider,
+          model: body?.model,
+          apiBase: body?.apiBase,
+          service: body?.service
+        };
+      }
+    } catch {
+      /* not listening yet */
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  return lastForeign ?? { status: 'absent' };
+}
+
 export async function waitForProxy(baseUrl: string, timeoutMs: number = 20000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
 

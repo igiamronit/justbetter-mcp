@@ -9,6 +9,24 @@ format and CLI surface may change between minor versions.
 
 ### Fixed
 
+- **A gateway left running from an earlier session silently served every request.** The proxy
+  logs a warning when its port is taken and then carries on without one, the warning went to
+  a console channel the TUI silences, and `waitForProxy` only asked whether *anything*
+  answered `/health` -- which every instance did, with the same two constants. So an orphaned
+  gateway kept port 4141, the new proxy never bound it, and the TUI printed "Gateway ready."
+  over a process still holding whatever provider, key and model it had loaded hours earlier.
+  A config switched to Gemini kept returning Mistral's errors, including
+  `Invalid model: gemini-2.5-flash`, which looks exactly like a broken key or a bad model
+  name. `/health` now reports the instance token, pid, provider, model and API base, the TUI
+  waits for *its own* proxy rather than any proxy, and a port held by something else is
+  reported with the pid to close and what it is actually serving. A failure during the first
+  boot is reported too, instead of being discarded.
+
+### Changed
+
+- A failed assertion in the setup-wizard test left its ink instance mounted, which broke every
+  later test that renders the app -- one real failure looked like eight. The mounts are now
+  torn down in a `finally`.
 - **`/setup` accepted a model that does not exist.** The wizard checked the API key against
   the provider but never the model name, so a typo like `gemini-3.8-flash` saved cleanly,
   restarted the gateway, and then failed every message with an opaque
