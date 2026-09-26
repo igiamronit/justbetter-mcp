@@ -31,6 +31,10 @@ export function SetupWizard({ onComplete, onCancel }: {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [checking, setChecking] = useState(false);
+  // What the provider said it will accept, captured from the same request that verified the
+  // key. Empty means we could not ask, in which case the model is saved unverified rather
+  // than blocking someone who is offline.
+  const [models, setModels] = useState<string[]>([]);
 
   // Only offered once there is a working config to fall back to. On a first run there is
   // nothing to cancel back to, so Esc would just strand the user on an empty screen.
@@ -82,12 +86,27 @@ export function SetupWizard({ onComplete, onCancel }: {
       setNotice(`${check.message} Saving it unverified.`);
     }
 
+    setModels(check.status === 'valid' ? check.models : []);
     setKeyValue(trimmed);
     setStep('model');
   };
 
   const submitModel = (value: string) => {
-    setModelValue(value.trim() || PROVIDER_DEFAULT_MODEL[provider]);
+    const chosen = value.trim() || PROVIDER_DEFAULT_MODEL[provider];
+
+    // A model name was accepted without a word of checking, so a typo like
+    // "gemini-3.8-flash" saved cleanly, restarted the gateway and then failed every single
+    // message with an opaque 400. The list came back with the key check, so this costs
+    // nothing. An empty list means the provider could not be reached: save it unverified
+    // rather than stranding someone offline.
+    if (models.length > 0 && !models.includes(chosen)) {
+      const suggestions = models.slice(0, 6).join(', ');
+      setError(`${provider === 'gemini' ? 'Google Gemini' : 'Mistral'} has no model called "${chosen}". Try one of: ${suggestions}`);
+      return;
+    }
+
+    setError('');
+    setModelValue(chosen);
     // Prefilled with the folder the CLI was started in, not the one saved last time: a
     // path left over from another project is never what you want here, and it silently
     // pointed the agent at someone else's source tree.
@@ -168,11 +187,15 @@ export function SetupWizard({ onComplete, onCancel }: {
       {step === 'model' ? (
         <Box flexDirection="column">
           <Text>Which model? Enter accepts the default.</Text>
+          {models.length > 0
+            ? <Text dimColor>Available: {models.slice(0, 6).join(', ')}{models.length > 6 ? ', ...' : ''}</Text>
+            : null}
           <Box height={1} />
           <Box>
             <Text color="blue" bold>Model {'>'} </Text>
             <TextInput value={modelValue} onChange={setModelValue} onSubmit={submitModel} />
           </Box>
+          {error ? <Text color="red">{error}</Text> : null}
           {notice ? <Text color="yellow">{notice}</Text> : null}
         </Box>
       ) : null}

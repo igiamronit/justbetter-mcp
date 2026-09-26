@@ -639,6 +639,23 @@ export function App({ mcpClient }: { mcpClient: Client | null }) {
           }
           cliConfig.llmProxy[PROVIDER_KEY_FIELD[provider]] = value;
         } else if (key === 'model') {
+          // Same hole as the wizard had: any string was accepted, saved and applied, and only
+          // the next message revealed it with a 400. The key check also returns the model
+          // list, so ask before saving. No key yet, or an unreachable provider, means it is
+          // saved unverified rather than blocking the change.
+          const provider = (cliConfig.apiProvider || 'gemini') as Provider;
+          const providerKey = cliConfig.llmProxy?.[PROVIDER_KEY_FIELD[provider]];
+          if (providerKey && !isPlaceholderApiKey(cliConfig)) {
+            appendEvent({ type: 'system', text: `Checking the model with ${PROVIDER_LABEL[provider]}...` });
+            const check = await verifyApiKey(provider, providerKey);
+            if (check.status === 'valid' && check.models.length > 0 && !check.models.includes(value)) {
+              appendEvent({ type: 'system', isError: true, text:
+                `${PROVIDER_LABEL[provider]} has no model called "${value}". It was not saved.` });
+              appendEvent({ type: 'system', text:
+                `Available: ${check.models.slice(0, 8).join(', ')}${check.models.length > 8 ? ', ...' : ''}` });
+              return;
+            }
+          }
           cliConfig.llmProxy.model = value;
         } else if (key === 'workspace') {
           const parsed = parseWorkspaceInput(value);

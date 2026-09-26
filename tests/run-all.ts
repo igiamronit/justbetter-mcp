@@ -602,7 +602,15 @@ const tests: TestCase[] = [
         const auth = String(init?.headers?.Authorization ?? '');
         attempted.push(String(url));
         const ok = auth === `Bearer ${GOOD_KEY}` || auth === 'Bearer sk-new-mistral';
-        return { ok, status: ok ? 200 : 401, text: async () => '', json: async () => ({}) };
+        // Each provider lists only its own models, as it really would. Gemini prefixes its
+        // ids with "models/" and Mistral does not, so the stripping is covered here too.
+        const isMistral = String(url).includes('mistral');
+        return {
+          ok, status: ok ? 200 : 401, text: async () => '',
+          json: async () => ({ data: isMistral
+            ? [{ id: 'mistral-large-latest' }, { id: 'mistral-medium-latest' }]
+            : [{ id: 'models/gemini-2.0-flash' }, { id: 'models/gemini-2.5-flash' }] })
+        };
       }) as any;
 
       const stripAnsi = (value: string) => value.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '');
@@ -675,8 +683,26 @@ const tests: TestCase[] = [
         await press(first.stdin, ENTER, 1, 350);
         assert.ok(first.frame().includes('Which model?'), first.frame());
         assert.ok(first.frame().includes('gemini-2.0-flash'), 'the model default must match the provider');
+        // The step lists what the provider will actually accept, with the "models/" prefix
+        // stripped so it matches what gets typed and what the config stores.
+        assert.ok(first.frame().includes('gemini-2.5-flash'), 'the available models must be offered: ' + first.frame());
+        assert.ok(!first.frame().includes('models/gemini'), 'the "models/" prefix must be stripped: ' + first.frame());
 
-        await press(first.stdin, ENTER, 1, 120);
+        // A model the provider does not have was accepted, saved and applied without a word,
+        // and only the next message revealed it -- as an opaque 400 from the provider, long
+        // after the setup that caused it.
+        await press(first.stdin, BACKSPACE, 24, 3);
+        first.stdin.write('gemini-3.8-flash');
+        await wait(80);
+        await press(first.stdin, ENTER, 1, 250);
+        assert.ok(/no model called/.test(first.frame()),
+          'a model the provider does not have must be refused: ' + first.frame());
+        assert.ok(first.frame().includes('Which model?'), 'a refused model must keep you on the model step');
+
+        await press(first.stdin, BACKSPACE, 24, 3);
+        first.stdin.write('gemini-2.0-flash');
+        await wait(80);
+        await press(first.stdin, ENTER, 1, 200);
         assert.ok(first.frame().includes('Which folder should the agent'), first.frame());
         assert.ok(first.frame().includes(projectDir), 'the folder must default to where the CLI was launched');
         assert.ok(!first.frame().includes(staleDir),

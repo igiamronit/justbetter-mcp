@@ -128,9 +128,25 @@ export function isPlaceholderApiKey(config: Config): boolean {
 }
 
 export type KeyCheck =
-  | { status: "valid" }
+  | { status: "valid"; models: string[] }
   | { status: "rejected"; message: string }
   | { status: "unknown"; message: string };
+
+/**
+ * Model ids out of an OpenAI-compatible /models payload.
+ *
+ * Gemini returns them prefixed ("models/gemini-2.0-flash") but accepts them either way, so
+ * the prefix is dropped to match what the user types and what the config stores.
+ */
+function parseModelIds(payload: any): string[] {
+  const entries = Array.isArray(payload?.data) ? payload.data : [];
+  const ids: string[] = [];
+  for (const entry of entries) {
+    const id = typeof entry?.id === "string" ? entry.id : undefined;
+    if (id) ids.push(id.startsWith("models/") ? id.slice("models/".length) : id);
+  }
+  return ids;
+}
 
 /**
  * Asks the provider whether a key works, using the cheapest authenticated endpoint
@@ -153,7 +169,18 @@ export async function verifyApiKey(
       headers: { Authorization: `Bearer ${key}` },
       signal: controller.signal,
     });
-    if (response.ok) return { status: "valid" };
+    if (response.ok) {
+      // The same response that proves the key works also lists the models it may use, so
+      // the model name can be checked without a second round trip. Throwing this away is
+      // how "gemini-3.8-flash" got saved and turned every later message into a 400.
+      let models: string[] = [];
+      try {
+        models = parseModelIds(await response.json());
+      } catch {
+        models = [];
+      }
+      return { status: "valid", models };
+    }
     if (response.status === 401 || response.status === 403) {
       return { status: "rejected", message: `The provider rejected that key (HTTP ${response.status}).` };
     }

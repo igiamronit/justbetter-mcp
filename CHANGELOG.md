@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 This project uses [Semantic Versioning](https://semver.org/). While on `0.x`, the config
 format and CLI surface may change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+
+- **`/setup` accepted a model that does not exist.** The wizard checked the API key against
+  the provider but never the model name, so a typo like `gemini-3.8-flash` saved cleanly,
+  restarted the gateway, and then failed every message with an opaque
+  `400 Invalid model` -- long after the setup that caused it. The key check already calls the
+  provider's `/models` endpoint, which returns the list of valid names, and that list was
+  being thrown away. It is now used: the model step shows what the provider offers, and a
+  name it does not have is refused before anything is saved. `/config set model` checks the
+  same way. An unreachable provider still saves the value unverified, so being offline does
+  not block configuration.
+
 ## [0.4.0] — 2026-09-26
 
 ### Fixed
