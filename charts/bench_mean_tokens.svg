@@ -1,15 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 400" width="820" height="400" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 414" width="880" height="414" role="img">
 <style>.bg { fill: #ffffff; }
 .title { font: 600 17px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
 .sub { font: 400 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
 .axis { font: 400 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
 .lbl { font: 600 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.arm { font: 700 16px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.arm4 { font: 700 16px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #8250df; }
+.tail4 { font: 400 11px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #8250df; }
 .val { font: 700 13px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
 .small { font: 400 10.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
 .grid { stroke: #d1d9e0; stroke-width: 1; }
 .axisline { stroke: #59636e; stroke-width: 1; }
-.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; }
-.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; }
+.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; } .m4 { fill: #8250df; }
+.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; } .m4c { fill: #d2b8ff; }
 .medmark { stroke: #1f2328; stroke-width: 2; stroke-dasharray: 3 2; }
 .good { font: 700 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
 .goodsm { font: 700 10px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
@@ -18,40 +21,49 @@
 .base { font: 400 11px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
 @media (prefers-color-scheme: dark) {
   .bg { fill: #0d1117; }
-  .title, .lbl, .val { fill: #e6edf3; }
+  .title, .lbl, .val, .arm { fill: #e6edf3; }
+  .arm4, .tail4 { fill: #a371f7; }
   .sub, .axis, .small, .base { fill: #9198a1; }
   .grid { stroke: #2f3742; }
   .axisline { stroke: #9198a1; }
-  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; }
-  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; }
+  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; } .m4 { fill: #a371f7; }
+  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; } .m4c { fill: #432c7a; }
   .medmark { stroke: #e6edf3; }
   .good, .goodsm { fill: #3fb950; }
   .bad, .badsm { fill: #ff7b72; }
 }</style>
-<rect class="bg" width="820" height="400" rx="6"/>
-<text class="title" x="70.0" y="34.0">Mean tokens per completed run</text>
-<line class="grid" x1="116.0" y1="308.0" x2="750.0" y2="308.0"/><text class="axis" x="108.0" y="312.0" text-anchor="end">0</text><line class="grid" x1="116.0" y1="252.5" x2="750.0" y2="252.5"/><text class="axis" x="108.0" y="256.5" text-anchor="end">15,000</text><line class="grid" x1="116.0" y1="197.0" x2="750.0" y2="197.0"/><text class="axis" x="108.0" y="201.0" text-anchor="end">30,000</text><line class="grid" x1="116.0" y1="141.5" x2="750.0" y2="141.5"/><text class="axis" x="108.0" y="145.5" text-anchor="end">45,000</text><line class="grid" x1="116.0" y1="86.0" x2="750.0" y2="86.0"/><text class="axis" x="108.0" y="90.0" text-anchor="end">60,000</text>
-<line class="axisline" x1="116.0" y1="308.0" x2="750.0" y2="308.0"/>
-<text class="axis" x="70.0" y="74.0">tokens</text>
-<rect class="m1" x="169.7" y="207.2" width="104.0" height="100.8" rx="2"/>
-<text class="val" x="221.7" y="194.2" text-anchor="middle">27,251</text>
-<text class="good" x="221.7" y="175.2" text-anchor="middle">−42.6%</text>
-<line class="medmark" x1="169.7" y1="226.7" x2="273.7" y2="226.7"/>
-<text class="lbl" x="221.7" y="332.0" text-anchor="middle">Mode 1</text>
-<text class="small" x="221.7" y="349.0" text-anchor="middle">semantic injection</text>
-<text class="small" x="221.7" y="366.0" text-anchor="middle">median 21,977  ·  7/8 passed</text>
-<rect class="m2" x="381.0" y="160.7" width="104.0" height="147.3" rx="2"/>
-<text class="val" x="433.0" y="147.7" text-anchor="middle">39,798</text>
-<text class="good" x="433.0" y="128.7" text-anchor="middle">−16.2%</text>
-<line class="medmark" x1="381.0" y1="214.6" x2="485.0" y2="214.6"/>
-<text class="small" x="433.0" y="332.0" text-anchor="middle">Mode 2</text>
-<text class="small" x="433.0" y="349.0" text-anchor="middle">reactive discovery</text>
-<text class="small" x="433.0" y="366.0" text-anchor="middle">median 25,255  ·  7/8 passed</text>
-<rect class="m3" x="592.3" y="132.3" width="104.0" height="175.7" rx="2"/>
-<text class="val" x="644.3" y="119.3" text-anchor="middle">47,496</text>
-<text class="base" x="644.3" y="100.3" text-anchor="middle">baseline</text>
-<line class="medmark" x1="592.3" y1="176.7" x2="696.3" y2="176.7"/>
-<text class="small" x="644.3" y="332.0" text-anchor="middle">Mode 3</text>
-<text class="small" x="644.3" y="349.0" text-anchor="middle">inject-all baseline</text>
-<text class="small" x="644.3" y="366.0" text-anchor="middle">median 35,494  ·  5/8 passed</text>
+<rect class="bg" width="880" height="414" rx="6"/>
+<text class="title" x="60.0" y="34.0">Mean tokens per completed run</text>
+<line class="grid" x1="106.0" y1="322.0" x2="820.0" y2="322.0"/><text class="axis" x="98.0" y="326.0" text-anchor="end">0</text><line class="grid" x1="106.0" y1="263.0" x2="820.0" y2="263.0"/><text class="axis" x="98.0" y="267.0" text-anchor="end">25,000</text><line class="grid" x1="106.0" y1="204.0" x2="820.0" y2="204.0"/><text class="axis" x="98.0" y="208.0" text-anchor="end">50,000</text><line class="grid" x1="106.0" y1="145.0" x2="820.0" y2="145.0"/><text class="axis" x="98.0" y="149.0" text-anchor="end">75,000</text><line class="grid" x1="106.0" y1="86.0" x2="820.0" y2="86.0"/><text class="axis" x="98.0" y="90.0" text-anchor="end">100,000</text>
+<line class="axisline" x1="106.0" y1="322.0" x2="820.0" y2="322.0"/>
+<text class="axis" x="60.0" y="74.0">tokens</text>
+<rect class="m1" x="139.5" y="257.7" width="104.0" height="64.3" rx="2"/>
+<text class="val" x="191.5" y="244.7" text-anchor="middle">27,251</text>
+<text class="good" x="191.5" y="225.7" text-anchor="middle">−42.6%</text>
+<line class="medmark" x1="139.5" y1="270.1" x2="243.5" y2="270.1"/>
+<text class="arm" x="191.5" y="350.0" text-anchor="middle">Mode 1</text>
+<text class="small" x="191.5" y="368.0" text-anchor="middle">semantic injection</text>
+<text class="small" x="191.5" y="385.0" text-anchor="middle">median 21,977  ·  7/8 passed</text>
+<rect class="m2" x="310.5" y="228.1" width="104.0" height="93.9" rx="2"/>
+<text class="val" x="362.5" y="215.1" text-anchor="middle">39,798</text>
+<text class="good" x="362.5" y="196.1" text-anchor="middle">−16.2%</text>
+<line class="medmark" x1="310.5" y1="262.4" x2="414.5" y2="262.4"/>
+<text class="arm" x="362.5" y="350.0" text-anchor="middle">Mode 2</text>
+<text class="small" x="362.5" y="368.0" text-anchor="middle">reactive discovery</text>
+<text class="small" x="362.5" y="385.0" text-anchor="middle">median 25,255  ·  7/8 passed</text>
+<rect class="m3" x="481.5" y="209.9" width="104.0" height="112.1" rx="2"/>
+<text class="val" x="533.5" y="196.9" text-anchor="middle">47,496</text>
+<text class="base" x="533.5" y="177.9" text-anchor="middle">baseline</text>
+<line class="medmark" x1="481.5" y1="238.2" x2="585.5" y2="238.2"/>
+<text class="arm" x="533.5" y="350.0" text-anchor="middle">Mode 3</text>
+<text class="small" x="533.5" y="368.0" text-anchor="middle">inject-all baseline</text>
+<text class="small" x="533.5" y="385.0" text-anchor="middle">median 35,494  ·  5/8 passed</text>
+<line class="grid" x1="634.0" y1="82.0" x2="634.0" y2="370.0"/>
+<rect class="m4" x="682.5" y="114.4" width="104.0" height="207.6" rx="2"/>
+<text class="val" x="734.5" y="101.4" text-anchor="middle">87,959</text>
+<text class="bad" x="734.5" y="82.4" text-anchor="middle">+85.2%</text>
+<line class="medmark" x1="682.5" y1="187.8" x2="786.5" y2="187.8"/>
+<text class="arm4" x="734.5" y="350.0" text-anchor="middle">OpenCode</text>
+<text class="tail4" x="734.5" y="368.0" text-anchor="middle">unmodified</text>
+<text class="small" x="734.5" y="385.0" text-anchor="middle">median 56,882  ·  6/8 passed</text>
 </svg>

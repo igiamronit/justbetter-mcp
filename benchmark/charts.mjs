@@ -12,22 +12,42 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
-const runDir = process.argv[2] ?? path.join(here, 'results', '2026-09-26T13-49-49-254Z');
+const resultsRoot = path.join(here, 'results');
 const outDir = path.join(repoRoot, 'charts');
 fs.mkdirSync(outDir, { recursive: true });
 
-const rows = fs.readFileSync(path.join(runDir, 'raw.jsonl'), 'utf-8')
-  .split(String.fromCharCode(10)).filter(Boolean).map(line => JSON.parse(line))
-  .filter(row => !row.abandoned);
+// Merge every run directory, newest winning a tie on (arm, task), so arms measured later sit beside
+// the original three without anything being re-run.
+const byKey = new Map();
+for (const name of fs.readdirSync(resultsRoot).sort()) {
+  const raw = path.join(resultsRoot, name, 'raw.jsonl');
+  if (!fs.existsSync(raw)) continue;
+  for (const line of fs.readFileSync(raw, 'utf-8').split(String.fromCharCode(10)).filter(Boolean)) {
+    try {
+      const row = JSON.parse(line);
+      if (!row.abandoned) byKey.set(row.mode + '|' + row.taskId, row);
+    } catch { /* skip a torn line */ }
+  }
+}
+const rows = [...byKey.values()];
 
-const MODES = ['mode1', 'mode2', 'mode3'];
+const MODES = ['mode1', 'mode2', 'mode3', 'opencode'].filter(m => rows.some(r => r.mode === m));
+// Mode 3, dump-everything, is the baseline. OpenCode is not a baseline -- it is an outside
+// reference point, set apart by a gap in the charts and measured against the same baseline as
+// everything else, which is why it shows as a red increase.
+const BASELINE = 'mode3';
+const APART = 'opencode';
 const NAME = {
   mode1: 'Mode 1 - semantic injection',
   mode2: 'Mode 2 - reactive discovery',
-  mode3: 'Mode 3 - inject-all baseline'
+  mode3: 'Mode 3 - inject-all baseline',
+  opencode: 'OpenCode - unmodified'
 };
-const SHORT = { mode1: 'Mode 1', mode2: 'Mode 2', mode3: 'Mode 3' };
-const TAIL = { mode1: 'semantic injection', mode2: 'reactive discovery', mode3: 'inject-all baseline' };
+const SHORT = { mode1: 'Mode 1', mode2: 'Mode 2', mode3: 'Mode 3', opencode: 'OpenCode' };
+const TAIL = {
+  mode1: 'semantic injection', mode2: 'reactive discovery',
+  mode3: 'inject-all baseline', opencode: 'unmodified'
+};
 
 const sum = list => list.reduce((total, value) => total + value, 0);
 const mean = list => sum(list) / list.length;
@@ -63,12 +83,15 @@ const STYLE = [
   '.sub { font: 400 12.5px ' + FONT + '; fill: #59636e; }',
   '.axis { font: 400 12px ' + FONT + '; fill: #59636e; }',
   '.lbl { font: 600 12.5px ' + FONT + '; fill: #1f2328; }',
+  '.arm { font: 700 16px ' + FONT + '; fill: #1f2328; }',
+  '.arm4 { font: 700 16px ' + FONT + '; fill: #8250df; }',
+  '.tail4 { font: 400 11px ' + FONT + '; fill: #8250df; }',
   '.val { font: 700 13px ' + FONT + '; fill: #1f2328; }',
   '.small { font: 400 10.5px ' + FONT + '; fill: #59636e; }',
   '.grid { stroke: #d1d9e0; stroke-width: 1; }',
   '.axisline { stroke: #59636e; stroke-width: 1; }',
-  '.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; }',
-  '.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; }',
+  '.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; } .m4 { fill: #8250df; }',
+  '.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; } .m4c { fill: #d2b8ff; }',
   '.medmark { stroke: #1f2328; stroke-width: 2; stroke-dasharray: 3 2; }',
   '.good { font: 700 12px ' + FONT + '; fill: #1a7f37; }',
   '.goodsm { font: 700 10px ' + FONT + '; fill: #1a7f37; }',
@@ -77,12 +100,13 @@ const STYLE = [
   '.base { font: 400 11px ' + FONT + '; fill: #59636e; }',
   '@media (prefers-color-scheme: dark) {',
   '  .bg { fill: #0d1117; }',
-  '  .title, .lbl, .val { fill: #e6edf3; }',
+  '  .title, .lbl, .val, .arm { fill: #e6edf3; }',
+  '  .arm4, .tail4 { fill: #a371f7; }',
   '  .sub, .axis, .small, .base { fill: #9198a1; }',
   '  .grid { stroke: #2f3742; }',
   '  .axisline { stroke: #9198a1; }',
-  '  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; }',
-  '  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; }',
+  '  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; } .m4 { fill: #a371f7; }',
+  '  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; } .m4c { fill: #432c7a; }',
   '  .medmark { stroke: #e6edf3; }',
   '  .good, .goodsm { fill: #3fb950; }',
   '  .bad, .badsm { fill: #ff7b72; }',
@@ -105,8 +129,8 @@ function delta(value, baseline, small) {
   };
 }
 
-const cls = { mode1: 'm1', mode2: 'm2', mode3: 'm3' };
-const clsPale = { mode1: 'm1c', mode2: 'm2c', mode3: 'm3c' };
+const cls = { mode1: 'm1', mode2: 'm2', mode3: 'm3', opencode: 'm4' };
+const clsPale = { mode1: 'm1c', mode2: 'm2c', mode3: 'm3c', opencode: 'm4c' };
 const commas = value => Math.round(value).toLocaleString('en-US');
 const one = value => value.toFixed(1);
 
@@ -164,17 +188,18 @@ function gridY(x0, x1, yTop, yBottom, top, step, format) {
 /* ---------- 1. headline: mean tokens per run, split prompt vs completion ---------- */
 
 function chartMeanTokens() {
-  const W = 820;
-  const H = 400;
-  const gutter = 70;          // identical left and right, so the plot sits centred
+  const W = 880;
+  const H = 414;
+  const gutter = 60;          // identical left and right, so the plot sits centred
   const x0 = gutter + 46;     // leaves room for the y tick labels
   const x1 = W - gutter;
   const yTop = 86;
   const yBottom = H - 92;
   const { top, step } = scale(Math.max(...MODES.map(mode => arm[mode].meanTotal)));
-  const slot = (x1 - x0) / MODES.length;
-  const barW = 104;
-  const baseline = arm.mode3.meanTotal;
+  const gap = MODES.includes(APART) ? 30 : 0;
+  const slot = (x1 - x0 - gap) / MODES.length;
+  const barW = Math.min(104, slot - 34);
+  const baseline = arm[BASELINE].meanTotal;
   const parts = [
     text('title', gutter, 34, 'Mean tokens per completed run'),
     gridY(x0, x1, yTop, yBottom, top, step),
@@ -183,9 +208,15 @@ function chartMeanTokens() {
   ];
   MODES.forEach((mode, index) => {
     const data = arm[mode];
-    const cx = x0 + slot * index + slot / 2;
+    const shift = mode === APART ? gap : 0;
+    const cx = x0 + slot * index + slot / 2 + shift;
     const bx = cx - barW / 2;
     const height = value => (value / top) * (yBottom - yTop);
+    if (mode === APART) {
+      // A hairline to say "this one is not ours".
+      const dx = x0 + slot * index + gap / 2;
+      parts.push(line('grid', dx, yTop - 4, dx, yBottom + 48));
+    }
     const barTop = yBottom - height(data.meanTotal);
     parts.push(rect(cls[mode], bx, barTop, barW, height(data.meanTotal), 2));
     parts.push(text('val', cx, barTop - 13, commas(data.meanTotal), 'middle'));
@@ -194,9 +225,9 @@ function chartMeanTokens() {
     // Median rule spans the bar and nothing else, so every group is the same width.
     const medY = yBottom - height(data.medianTotal);
     parts.push(line('medmark', bx, medY, bx + barW, medY));
-    parts.push(text(mode === 'mode1' ? 'lbl' : 'small', cx, yBottom + 24, SHORT[mode], 'middle'));
-    parts.push(text('small', cx, yBottom + 41, TAIL[mode], 'middle'));
-    parts.push(text('small', cx, yBottom + 58,
+    parts.push(text(mode === APART ? 'arm4' : 'arm', cx, yBottom + 28, SHORT[mode], 'middle'));
+    parts.push(text(mode === APART ? 'tail4' : 'small', cx, yBottom + 46, TAIL[mode], 'middle'));
+    parts.push(text('small', cx, yBottom + 63,
       'median ' + commas(data.medianTotal) + '  ·  ' + data.passed + '/' + data.runs + ' passed', 'middle'));
   });
   return svg(W, H, parts.join(String.fromCharCode(10)));
@@ -205,10 +236,10 @@ function chartMeanTokens() {
 /* ---------- 2. the mechanism: same price per turn, different number of turns ---------- */
 
 function chartTurnEconomics() {
-  const W = 820;
-  const H = 336;
-  const gutter = 70;
-  const sep = 64;
+  const W = 880;
+  const H = 346;
+  const gutter = 56;
+  const sep = 56;
   const panelW = (W - 2 * gutter - sep) / 2;
   const parts = [text('title', gutter, 34, 'What a turn costs, and how many turns it takes')];
 
@@ -218,21 +249,26 @@ function chartTurnEconomics() {
     const yTop = 100;
     const yBottom = H - 62;
     const { top, step } = scale(Math.max(...MODES.map(mode => values[mode])));
-    const slot = (x1 - x0) / MODES.length;
-    const barW = 54;
+    const gap = MODES.includes(APART) ? 20 : 0;
+    const slot = (x1 - x0 - gap) / MODES.length;
+    const barW = Math.min(54, slot - 18);
     const out = [
       text('lbl', (x0 + x1) / 2, 68, title, 'middle'),
       gridY(x0, x1, yTop, yBottom, top, step, format),
       line('axisline', x0, yBottom, x1, yBottom)
     ];
     MODES.forEach((mode, index) => {
-      const cx = x0 + slot * index + slot / 2;
+      const cx = x0 + slot * index + slot / 2 + (mode === APART ? gap : 0);
       const h = (values[mode] / top) * (yBottom - yTop);
+      if (mode === APART) {
+        const dx = x0 + slot * index + gap / 2;
+        out.push(line('grid', dx, yTop - 4, dx, yBottom + 14));
+      }
       out.push(rect(cls[mode], cx - barW / 2, yBottom - h, barW, h, 2));
       out.push(text('val', cx, yBottom - h - 11, format(values[mode]), 'middle'));
-      const change = delta(values[mode], values.mode3);
+      const change = delta(values[mode], values[BASELINE]);
       out.push(text(change.klass, cx, yBottom - h - 28, change.label, 'middle'));
-      out.push(text(mode === 'mode1' ? 'lbl' : 'small', cx, yBottom + 22, SHORT[mode], 'middle'));
+      out.push(text(mode === APART ? 'arm4' : 'arm', cx, yBottom + 26, SHORT[mode], 'middle'));
     });
     return out.join(String.fromCharCode(10));
   };
@@ -264,7 +300,7 @@ function chartPerTask() {
   ];
   taskIds.forEach((taskId, index) => {
     const groupCx = x0 + slot * index + slot / 2;
-    const baseline = rows.find(item => item.taskId === taskId && item.mode === 'mode3');
+    const baseline = rows.find(item => item.taskId === taskId && item.mode === BASELINE);
     MODES.forEach((mode, modeIndex) => {
       const row = rows.find(item => item.taskId === taskId && item.mode === mode);
       if (!row) return;
@@ -274,7 +310,7 @@ function chartPerTask() {
       parts.push(rect(cls[mode], bx, barTop, barW, h, 1.5));
       if (!row.passed) parts.push(text('small', bx + barW / 2, barTop - 4, 'F', 'middle'));
       // Rotated so eight tasks' worth of percentages cannot collide horizontally.
-      if (mode !== 'mode3' && baseline) {
+      if (mode !== BASELINE && baseline) {
         const change = delta(row.totalTokens, baseline.totalTokens, true);
         const lx = bx + barW / 2 + 3.5;
         const ly = barTop - (row.passed ? 8 : 18);
@@ -288,9 +324,9 @@ function chartPerTask() {
       label.length > 13 ? label.slice(0, 12) + '.' : label, 'middle'));
   });
   MODES.forEach((mode, index) => {
-    const lx = x0 + index * 210;
+    const lx = x0 + index * 205;
     parts.push(rect(cls[mode], lx, H - 40, 12, 12, 2));
-    parts.push(text('small', lx + 18, H - 30, NAME[mode]));
+    parts.push(text(mode === APART ? 'tail4' : 'small', lx + 18, H - 30, NAME[mode]));
   });
   parts.push(text('small', x0 + 640, H - 30, 'F = failed verification'));
   return svg(W, H, parts.join(String.fromCharCode(10)));
