@@ -180,6 +180,9 @@ type Harvest = {
   turns: number;
   transcript: string;
   toolsCalled: string[];
+  toolsCalledRaw: string[];
+  mcpToolCalls: number;
+  builtinToolCalls: number;
   toolErrorCount: number;
   perTurn: { turn: number; prompt: number; completion: number; total: number; injected: number }[];
 };
@@ -212,6 +215,7 @@ function harvest(title: string): Harvest | null {
     const perTurn: Harvest['perTurn'] = [];
     const transcriptParts: string[] = [];
     const toolsCalled: string[] = [];
+    const toolsCalledRaw: string[] = [];
 
     for (const id of ids) {
       const messages = db.prepare(
@@ -249,6 +253,7 @@ function harvest(title: string): Harvest | null {
         };
         if (part.type === 'text' && part.text) transcriptParts.push(part.text);
         if (part.type === 'tool' && part.tool) {
+          toolsCalledRaw.push(part.tool);
           toolsCalled.push(part.tool.replace(/^bench(fs|term|mem)[_-]/, ''));
           const status = part.state?.status ?? '';
           if (status === 'error' || part.state?.error) toolErrorCount++;
@@ -267,7 +272,10 @@ function harvest(title: string): Harvest | null {
       totalTokens: promptTokens + cacheRead + completionTokens + reasoningTokens,
       turns,
       transcript: transcriptParts.join('\n'),
-      toolsCalled, toolErrorCount, perTurn
+      toolsCalled, toolsCalledRaw,
+      mcpToolCalls: toolsCalledRaw.filter(name => /^bench(fs|term|mem)[_-]/.test(name)).length,
+      builtinToolCalls: toolsCalledRaw.filter(name => !/^bench(fs|term|mem)[_-]/.test(name)).length,
+      toolErrorCount, perTurn
     };
   } finally {
     db.close();
@@ -325,7 +333,8 @@ async function runTask(task: typeof TASKS[number], globalNames: string[]) {
     const expected = task.expectedTools;
 
     log('    -> ' + (verdict.passed ? 'PASS' : 'FAIL') + ' ' + data.totalTokens.toLocaleString()
-      + ' tokens, ' + data.turns + ' turns  [' + verdict.detail + ']');
+      + ' tokens, ' + data.turns + ' turns, mcp=' + data.mcpToolCalls
+      + ' builtin=' + data.builtinToolCalls + '  [' + verdict.detail + ']');
 
     return {
       abandoned: false,
@@ -363,6 +372,9 @@ async function runTask(task: typeof TASKS[number], globalNames: string[]) {
         // OpenCode-only extras, kept out of the shared fields so nothing downstream breaks.
         opencode: {
           sessionId: data.sessionId,
+          toolsCalledRaw: data.toolsCalledRaw,
+          mcpToolCalls: data.mcpToolCalls,
+          builtinToolCalls: data.builtinToolCalls,
           reasoningTokens: data.reasoningTokens,
           cacheRead: data.cacheRead,
           cacheWrite: data.cacheWrite,
