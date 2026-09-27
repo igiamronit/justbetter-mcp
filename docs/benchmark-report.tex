@@ -28,6 +28,14 @@
 \definecolor{modeone}{HTML}{1F6FEB}
 \definecolor{modetwo}{HTML}{BF8700}
 \definecolor{modethree}{HTML}{CF222E}
+\definecolor{gaingreen}{HTML}{1A7F37}
+\definecolor{lossred}{HTML}{A40E26}
+
+% Change against Mode 3, the inject-all baseline. \gain for cheaper, \loss for more expensive --
+% Mode 2 needs more turns than the baseline does, and that must not be dressed in green.
+\newcommand{\gain}[1]{\textcolor{gaingreen}{\textbf{$-$#1\%}}}
+\newcommand{\loss}[1]{\textcolor{lossred}{\textbf{+#1\%}}}
+\newcommand{\basetag}{\textcolor{gray}{baseline}}
 
 \pgfplotsset{
   benchbar/.style={
@@ -237,6 +245,8 @@ the ordering should be read as directional.
   height=6.8cm,
   ylabel={tokens per run},
   symbolic x coords={Mode 1, Mode 2, Mode 3},
+  xticklabels={{Mode 1\\\gain{43}}, {Mode 2\\\gain{16}}, {Mode 3\\\basetag}},
+  x tick label style={align=center, font=\small},
   nodes near coords,
   ymax=58000,
   legend pos=north west,
@@ -247,9 +257,10 @@ the ordering should be read as directional.
 \legend{mean, median}
 \end{axis}
 \end{tikzpicture}
-\caption{Mean and median tokens per completed run. The gap between the two within each arm is the
-signature of the variance discussed in Section~\ref{sec:variance}: one unlucky run drags the mean
-well above the typical case.}
+\caption{Mean and median tokens per completed run, with each arm's change in mean against the
+inject-all baseline. The gap between mean and median within each arm is the signature of the
+variance discussed in Section~\ref{sec:variance}: one unlucky run drags the mean well above the
+typical case.}
 \label{fig:headline}
 \end{figure}
 
@@ -273,16 +284,24 @@ which tool to fetch, and that this would show up as reduced completion cost. It 
 \addplot[ybar, bar shift=0pt, fill=modeone!85, draw=none] coordinates {(Mode 1,4542)};
 \addplot[ybar, bar shift=0pt, fill=modetwo!85, draw=none] coordinates {(Mode 2,4752)};
 \addplot[ybar, bar shift=0pt, fill=modethree!85, draw=none] coordinates {(Mode 3,6129)};
+\node[above=12pt, font=\small] at (axis cs:Mode 1,4542) {\gain{26}};
+\node[above=12pt, font=\small] at (axis cs:Mode 2,4752) {\gain{22}};
+\node[above=12pt, font=\small] at (axis cs:Mode 3,6129) {\basetag};
 
 \nextgroupplot[ylabel={turns per run (mean)}, ymax=10, title={\small Number of turns}]
 \addplot[ybar, bar shift=0pt, fill=modeone!85, draw=none] coordinates {(Mode 1,6.0)};
 \addplot[ybar, bar shift=0pt, fill=modetwo!85, draw=none] coordinates {(Mode 2,8.4)};
 \addplot[ybar, bar shift=0pt, fill=modethree!85, draw=none] coordinates {(Mode 3,7.8)};
+\node[above=12pt, font=\small] at (axis cs:Mode 1,6.0) {\gain{23}};
+\node[above=12pt, font=\small] at (axis cs:Mode 2,8.4) {\loss{8}};
+\node[above=12pt, font=\small] at (axis cs:Mode 3,7.8) {\basetag};
 \end{groupplot}
 \end{tikzpicture}
 \caption{Mode 1 and Mode 2 pay nearly the same price per turn --- 4.6\% apart. The entire difference
 between them is how many turns they need. Mode 3 is the only arm whose per-turn price is genuinely
-higher, because it carries all 26 schemas every time.}
+higher, because it carries all 26 schemas every time. Percentages are against the inject-all
+baseline; note that reactive discovery needs \emph{more} turns than the baseline does, and recovers
+its saving purely on the size of each turn.}
 \label{fig:mechanism}
 \end{figure}
 
@@ -350,21 +369,23 @@ and should be waited out in future runs.
 \begin{table}[h]
 \centering
 \small
-\begin{tabular}{@{}lrrr@{}}
+\begin{tabular}{@{}lrlrlr@{}}
 \toprule
-\textbf{Task} & \textbf{Mode 1} & \textbf{Mode 2} & \textbf{Mode 3} \\
+\textbf{Task} & \multicolumn{2}{c}{\textbf{Mode 1}} & \multicolumn{2}{c}{\textbf{Mode 2}} & \textbf{Mode 3} \\
 \midrule
-\texttt{t1-read-count}            & 65,539 P & 15,663 P & 35,264 P \\
-\texttt{t2-file-size-distractors} & 14,683 P & 20,738 P & 25,466 P \\
-\texttt{t3-csv-sum}               & 13,995 P & 20,653 P & 94,026 \textbf{F} \\
-\texttt{t4-manifest}              & 25,033 P & 20,626 P & 35,724 P \\
-\texttt{t5-newest-file}           & 39,966 P & 29,772 P & 86,714 P \\
-\texttt{t6-recover-missing}       &  9,204 P & 31,325 P & 23,544 P \\
-\texttt{t7-absent-capability}     & 30,666 P & 75,080 P & 33,526 \textbf{F} \\
-\texttt{t8-ambiguous}             & 18,921 \textbf{F} & 104,525 \textbf{F} & 45,706 \textbf{F} \\
+\texttt{t1-read-count}            & 65,539 P & \loss{86} & 15,663 P & \gain{56} & 35,264 P \\
+\texttt{t2-file-size-distractors} & 14,683 P & \gain{42} & 20,738 P & \gain{19} & 25,466 P \\
+\texttt{t3-csv-sum}               & 13,995 P & \gain{85} & 20,653 P & \gain{78} & 94,026 \textbf{F} \\
+\texttt{t4-manifest}              & 25,033 P & \gain{30} & 20,626 P & \gain{42} & 35,724 P \\
+\texttt{t5-newest-file}           & 39,966 P & \gain{54} & 29,772 P & \gain{66} & 86,714 P \\
+\texttt{t6-recover-missing}       &  9,204 P & \gain{61} & 31,325 P & \loss{33} & 23,544 P \\
+\texttt{t7-absent-capability}     & 30,666 P & \gain{9}  & 75,080 P & \loss{124} & 33,526 \textbf{F} \\
+\texttt{t8-ambiguous}             & 18,921 \textbf{F} & \gain{59} & 104,525 \textbf{F} & \loss{129} & 45,706 \textbf{F} \\
 \bottomrule
 \end{tabular}
-\caption{Tokens per task. P denotes a passed verification, \textbf{F} a failed one.}
+\caption{Tokens per task, each retrieval arm shown with its change against the inject-all baseline
+in the same row. P denotes a passed verification, \textbf{F} a failed one. Mode 1 beats the baseline
+on seven of the eight tasks; Mode 2 on five.}
 \label{tab:pertask}
 \end{table}
 

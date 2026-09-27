@@ -70,17 +70,40 @@ const STYLE = [
   '.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; }',
   '.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; }',
   '.medmark { stroke: #1f2328; stroke-width: 2; stroke-dasharray: 3 2; }',
+  '.good { font: 700 12px ' + FONT + '; fill: #1a7f37; }',
+  '.goodsm { font: 700 10px ' + FONT + '; fill: #1a7f37; }',
+  '.bad { font: 700 12px ' + FONT + '; fill: #a40e26; }',
+  '.badsm { font: 700 10px ' + FONT + '; fill: #a40e26; }',
+  '.base { font: 400 11px ' + FONT + '; fill: #59636e; }',
   '@media (prefers-color-scheme: dark) {',
   '  .bg { fill: #0d1117; }',
   '  .title, .lbl, .val { fill: #e6edf3; }',
-  '  .sub, .axis, .small { fill: #9198a1; }',
+  '  .sub, .axis, .small, .base { fill: #9198a1; }',
   '  .grid { stroke: #2f3742; }',
   '  .axisline { stroke: #9198a1; }',
   '  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; }',
   '  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; }',
   '  .medmark { stroke: #e6edf3; }',
+  '  .good, .goodsm { fill: #3fb950; }',
+  '  .bad, .badsm { fill: #ff7b72; }',
   '}'
 ].join(String.fromCharCode(10));
+
+/**
+ * Change against the inject-all baseline, which is the arm every chart measures from. Green only
+ * where the arm actually beat the baseline -- Mode 2 needs *more* turns than inject-all does, and
+ * colouring that green to keep the chart tidy would be a lie.
+ */
+function delta(value, baseline, small) {
+  if (value === baseline) return { label: 'baseline', klass: 'base' };
+  const pct = 100 * (value - baseline) / baseline;
+  const better = pct < 0;
+  const sign = better ? String.fromCharCode(0x2212) : '+';
+  return {
+    label: sign + Math.abs(pct).toFixed(1) + '%',
+    klass: (better ? 'good' : 'bad') + (small ? 'sm' : '')
+  };
+}
 
 const cls = { mode1: 'm1', mode2: 'm2', mode3: 'm3' };
 const clsPale = { mode1: 'm1c', mode2: 'm2c', mode3: 'm3c' };
@@ -141,40 +164,40 @@ function gridY(x0, x1, yTop, yBottom, top, step, format) {
 /* ---------- 1. headline: mean tokens per run, split prompt vs completion ---------- */
 
 function chartMeanTokens() {
-  const W = 860;
-  const H = 450;
-  const x0 = 96;
-  const x1 = W - 96;
-  const yTop = 100;
-  const yBottom = H - 96;
+  const W = 820;
+  const H = 400;
+  const gutter = 70;          // identical left and right, so the plot sits centred
+  const x0 = gutter + 46;     // leaves room for the y tick labels
+  const x1 = W - gutter;
+  const yTop = 86;
+  const yBottom = H - 92;
   const { top, step } = scale(Math.max(...MODES.map(mode => arm[mode].meanTotal)));
   const slot = (x1 - x0) / MODES.length;
-  const barW = 116;
+  const barW = 104;
+  const baseline = arm.mode3.meanTotal;
   const parts = [
-    text('title', 30, 34, 'Mean tokens per completed run'),
-    text('sub', 30, 56, 'Lower is better. Eight verifiable tasks, one run each, nemotron-3-super. Bars split prompt (solid) from completion (pale).'),
-    text('sub', 30, 75, 'The dashed rule is the median, which is the figure to quote: within-arm spread is 4-7x at one repetition per cell.'),
+    text('title', gutter, 34, 'Mean tokens per completed run'),
     gridY(x0, x1, yTop, yBottom, top, step),
     line('axisline', x0, yBottom, x1, yBottom),
-    text('axis', 30, yTop - 12, 'tokens')
+    text('axis', gutter, yTop - 12, 'tokens')
   ];
   MODES.forEach((mode, index) => {
     const data = arm[mode];
     const cx = x0 + slot * index + slot / 2;
     const bx = cx - barW / 2;
     const height = value => (value / top) * (yBottom - yTop);
-    const promptH = height(data.meanPrompt);
-    const compH = height(data.meanCompletion);
-    parts.push(rect(clsPale[mode], bx, yBottom - promptH - compH, barW, compH, 2));
-    parts.push(rect(cls[mode], bx, yBottom - promptH, barW, promptH, 2));
-    parts.push(text('val', cx, yBottom - promptH - compH - 12, commas(data.meanTotal), 'middle'));
+    const barTop = yBottom - height(data.meanTotal);
+    parts.push(rect(cls[mode], bx, barTop, barW, height(data.meanTotal), 2));
+    parts.push(text('val', cx, barTop - 13, commas(data.meanTotal), 'middle'));
+    const change = delta(data.meanTotal, baseline);
+    parts.push(text(change.klass, cx, barTop - 32, change.label, 'middle'));
+    // Median rule spans the bar and nothing else, so every group is the same width.
     const medY = yBottom - height(data.medianTotal);
-    parts.push(line('medmark', bx - 12, medY, bx + barW + 12, medY));
-    parts.push(text('small', bx + barW + 16, medY + 4, 'med ' + commas(data.medianTotal)));
-    parts.push(text('lbl', cx, yBottom + 23, SHORT[mode], 'middle'));
-    parts.push(text('small', cx, yBottom + 40, TAIL[mode], 'middle'));
-    parts.push(text('small', cx, yBottom + 57, data.passed + '/' + data.runs + ' passed  |  '
-      + Math.round(100 * data.meanPrompt / data.meanTotal) + '% prompt', 'middle'));
+    parts.push(line('medmark', bx, medY, bx + barW, medY));
+    parts.push(text(mode === 'mode1' ? 'lbl' : 'small', cx, yBottom + 24, SHORT[mode], 'middle'));
+    parts.push(text('small', cx, yBottom + 41, TAIL[mode], 'middle'));
+    parts.push(text('small', cx, yBottom + 58,
+      'median ' + commas(data.medianTotal) + '  ·  ' + data.passed + '/' + data.runs + ' passed', 'middle'));
   });
   return svg(W, H, parts.join(String.fromCharCode(10)));
 }
@@ -182,25 +205,23 @@ function chartMeanTokens() {
 /* ---------- 2. the mechanism: same price per turn, different number of turns ---------- */
 
 function chartTurnEconomics() {
-  const W = 860;
-  const H = 410;
-  const panelW = (W - 60) / 2;
-  const parts = [
-    text('title', 30, 34, 'Why Mode 1 is cheaper: fewer turns, not a cheaper turn'),
-    text('sub', 30, 56, 'Mode 1 and Mode 2 pay nearly the same price per turn. The gap between them is turn count alone.'),
-    text('sub', 30, 75, 'Cost is about 97% prompt in every arm, so each extra turn re-sends the whole transcript and the whole tool surface.')
-  ];
+  const W = 820;
+  const H = 336;
+  const gutter = 70;
+  const sep = 64;
+  const panelW = (W - 2 * gutter - sep) / 2;
+  const parts = [text('title', gutter, 34, 'What a turn costs, and how many turns it takes')];
 
-  const panel = (offsetX, title, values, format, note) => {
-    const x0 = offsetX + 76;
-    const x1 = offsetX + panelW - 16;
-    const yTop = 126;
-    const yBottom = H - 80;
+  const panel = (left, title, values, format) => {
+    const x0 = left + 46;
+    const x1 = left + panelW;
+    const yTop = 100;
+    const yBottom = H - 62;
     const { top, step } = scale(Math.max(...MODES.map(mode => values[mode])));
     const slot = (x1 - x0) / MODES.length;
-    const barW = 58;
+    const barW = 54;
     const out = [
-      text('lbl', offsetX + 30, 108, title),
+      text('lbl', (x0 + x1) / 2, 68, title, 'middle'),
       gridY(x0, x1, yTop, yBottom, top, step, format),
       line('axisline', x0, yBottom, x1, yBottom)
     ];
@@ -208,24 +229,18 @@ function chartTurnEconomics() {
       const cx = x0 + slot * index + slot / 2;
       const h = (values[mode] / top) * (yBottom - yTop);
       out.push(rect(cls[mode], cx - barW / 2, yBottom - h, barW, h, 2));
-      out.push(text('val', cx, yBottom - h - 10, format(values[mode]), 'middle'));
-      out.push(text('lbl', cx, yBottom + 23, SHORT[mode], 'middle'));
+      out.push(text('val', cx, yBottom - h - 11, format(values[mode]), 'middle'));
+      const change = delta(values[mode], values.mode3);
+      out.push(text(change.klass, cx, yBottom - h - 28, change.label, 'middle'));
+      out.push(text(mode === 'mode1' ? 'lbl' : 'small', cx, yBottom + 22, SHORT[mode], 'middle'));
     });
-    out.push(text('small', offsetX + 30, H - 30, note));
     return out.join(String.fromCharCode(10));
   };
 
   const perTurn = Object.fromEntries(MODES.map(mode => [mode, arm[mode].tokPerTurn]));
   const turns = Object.fromEntries(MODES.map(mode => [mode, arm[mode].meanTurns]));
-  const perTurnGap = 100 * (perTurn.mode2 - perTurn.mode1) / perTurn.mode1;
-  const mode3Gap = 100 * (perTurn.mode3 - perTurn.mode1) / perTurn.mode1;
-  const turnGap = 100 * (turns.mode2 - turns.mode1) / turns.mode2;
-
-  parts.push(panel(0, 'Tokens per turn', perTurn, commas,
-    'Mode 1 vs Mode 2: ' + perTurnGap.toFixed(1) + '% apart. Mode 3 pays '
-      + Math.round(mode3Gap) + '% more per turn for its 26-tool surface.'));
-  parts.push(panel(panelW + 30, 'Turns per run (mean)', turns, one,
-    'Mode 1 finishes in ' + Math.round(turnGap) + '% fewer turns than Mode 2. That is the whole advantage.'));
+  parts.push(panel(gutter, 'Tokens per turn', perTurn, commas));
+  parts.push(panel(gutter + panelW + sep, 'Turns per run', turns, one));
   return svg(W, H, parts.join(String.fromCharCode(10)));
 }
 
@@ -233,31 +248,39 @@ function chartTurnEconomics() {
 
 function chartPerTask() {
   const W = 940;
-  const H = 470;
+  const H = 444;
   const x0 = 92;
   const x1 = W - 24;
-  const yTop = 96;
-  const yBottom = H - 98;
+  const yTop = 90;
+  const yBottom = H - 104;
   const { top, step } = scale(Math.max(...rows.map(row => row.totalTokens)));
   const slot = (x1 - x0) / taskIds.length;
   const barW = Math.min(22, (slot - 18) / 3);
   const parts = [
-    text('title', 30, 34, 'Tokens per task'),
-    text('sub', 30, 56, 'One run per cell. F marks a failed verification. The ordering is not uniform - Mode 2 wins three of the eight tasks outright.'),
-    text('sub', 30, 75, 'Note the range: the same arm can cost four to seven times more on one task than another, which is why single runs cannot settle this.'),
+    text('title', 30, 32, 'Tokens per task, against the inject-all baseline'),
     gridY(x0, x1, yTop, yBottom, top, step),
     line('axisline', x0, yBottom, x1, yBottom),
-    text('axis', 30, yTop - 12, 'tokens')
+    text('axis', 30, yTop - 10, 'tokens')
   ];
   taskIds.forEach((taskId, index) => {
     const groupCx = x0 + slot * index + slot / 2;
+    const baseline = rows.find(item => item.taskId === taskId && item.mode === 'mode3');
     MODES.forEach((mode, modeIndex) => {
       const row = rows.find(item => item.taskId === taskId && item.mode === mode);
       if (!row) return;
       const bx = groupCx - (barW * 3 + 6) / 2 + modeIndex * (barW + 3);
       const h = (row.totalTokens / top) * (yBottom - yTop);
-      parts.push(rect(cls[mode], bx, yBottom - h, barW, h, 1.5));
-      if (!row.passed) parts.push(text('small', bx + barW / 2, yBottom - h - 5, 'F', 'middle'));
+      const barTop = yBottom - h;
+      parts.push(rect(cls[mode], bx, barTop, barW, h, 1.5));
+      if (!row.passed) parts.push(text('small', bx + barW / 2, barTop - 4, 'F', 'middle'));
+      // Rotated so eight tasks' worth of percentages cannot collide horizontally.
+      if (mode !== 'mode3' && baseline) {
+        const change = delta(row.totalTokens, baseline.totalTokens, true);
+        const lx = bx + barW / 2 + 3.5;
+        const ly = barTop - (row.passed ? 8 : 18);
+        parts.push('<text class="' + change.klass + '" transform="rotate(-90 ' + one(lx) + ' '
+          + one(ly) + ')" x="' + one(lx) + '" y="' + one(ly) + '">' + change.label + '</text>');
+      }
     });
     const label = taskId.replace(/^t[0-9]+-/, '');
     parts.push(text('small', groupCx, yBottom + 18, taskId.slice(0, 2), 'middle'));
@@ -269,6 +292,7 @@ function chartPerTask() {
     parts.push(rect(cls[mode], lx, H - 40, 12, 12, 2));
     parts.push(text('small', lx + 18, H - 30, NAME[mode]));
   });
+  parts.push(text('small', x0 + 640, H - 30, 'F = failed verification'));
   return svg(W, H, parts.join(String.fromCharCode(10)));
 }
 

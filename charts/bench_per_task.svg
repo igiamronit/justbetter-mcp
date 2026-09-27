@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 470" width="940" height="470" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 444" width="940" height="444" role="img">
 <style>.bg { fill: #ffffff; }
 .title { font: 600 17px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
 .sub { font: 400 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
@@ -11,72 +11,94 @@
 .m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; }
 .m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; }
 .medmark { stroke: #1f2328; stroke-width: 2; stroke-dasharray: 3 2; }
+.good { font: 700 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
+.goodsm { font: 700 10px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
+.bad { font: 700 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #a40e26; }
+.badsm { font: 700 10px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #a40e26; }
+.base { font: 400 11px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
 @media (prefers-color-scheme: dark) {
   .bg { fill: #0d1117; }
   .title, .lbl, .val { fill: #e6edf3; }
-  .sub, .axis, .small { fill: #9198a1; }
+  .sub, .axis, .small, .base { fill: #9198a1; }
   .grid { stroke: #2f3742; }
   .axisline { stroke: #9198a1; }
   .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; }
   .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; }
   .medmark { stroke: #e6edf3; }
+  .good, .goodsm { fill: #3fb950; }
+  .bad, .badsm { fill: #ff7b72; }
 }</style>
-<rect class="bg" width="940" height="470" rx="6"/>
-<text class="title" x="30.0" y="34.0">Tokens per task</text>
-<text class="sub" x="30.0" y="56.0">One run per cell. F marks a failed verification. The ordering is not uniform - Mode 2 wins three of the eight tasks outright.</text>
-<text class="sub" x="30.0" y="75.0">Note the range: the same arm can cost four to seven times more on one task than another, which is why single runs cannot settle this.</text>
-<line class="grid" x1="92.0" y1="372.0" x2="916.0" y2="372.0"/><text class="axis" x="84.0" y="376.0" text-anchor="end">0</text><line class="grid" x1="92.0" y1="303.0" x2="916.0" y2="303.0"/><text class="axis" x="84.0" y="307.0" text-anchor="end">30,000</text><line class="grid" x1="92.0" y1="234.0" x2="916.0" y2="234.0"/><text class="axis" x="84.0" y="238.0" text-anchor="end">60,000</text><line class="grid" x1="92.0" y1="165.0" x2="916.0" y2="165.0"/><text class="axis" x="84.0" y="169.0" text-anchor="end">90,000</text><line class="grid" x1="92.0" y1="96.0" x2="916.0" y2="96.0"/><text class="axis" x="84.0" y="100.0" text-anchor="end">120,000</text>
-<line class="axisline" x1="92.0" y1="372.0" x2="916.0" y2="372.0"/>
-<text class="axis" x="30.0" y="84.0">tokens</text>
-<rect class="m1" x="107.5" y="221.3" width="22.0" height="150.7" rx="1.5"/>
-<rect class="m2" x="132.5" y="336.0" width="22.0" height="36.0" rx="1.5"/>
-<rect class="m3" x="157.5" y="290.9" width="22.0" height="81.1" rx="1.5"/>
-<text class="small" x="143.5" y="390.0" text-anchor="middle">t1</text>
-<text class="small" x="143.5" y="405.0" text-anchor="middle">read-count</text>
-<rect class="m1" x="210.5" y="338.2" width="22.0" height="33.8" rx="1.5"/>
-<rect class="m2" x="235.5" y="324.3" width="22.0" height="47.7" rx="1.5"/>
-<rect class="m3" x="260.5" y="313.4" width="22.0" height="58.6" rx="1.5"/>
-<text class="small" x="246.5" y="390.0" text-anchor="middle">t2</text>
-<text class="small" x="246.5" y="405.0" text-anchor="middle">file-size-di.</text>
-<rect class="m1" x="313.5" y="339.8" width="22.0" height="32.2" rx="1.5"/>
-<rect class="m2" x="338.5" y="324.5" width="22.0" height="47.5" rx="1.5"/>
-<rect class="m3" x="363.5" y="155.7" width="22.0" height="216.3" rx="1.5"/>
-<text class="small" x="374.5" y="150.7" text-anchor="middle">F</text>
-<text class="small" x="349.5" y="390.0" text-anchor="middle">t3</text>
-<text class="small" x="349.5" y="405.0" text-anchor="middle">csv-sum</text>
-<rect class="m1" x="416.5" y="314.4" width="22.0" height="57.6" rx="1.5"/>
-<rect class="m2" x="441.5" y="324.6" width="22.0" height="47.4" rx="1.5"/>
-<rect class="m3" x="466.5" y="289.8" width="22.0" height="82.2" rx="1.5"/>
-<text class="small" x="452.5" y="390.0" text-anchor="middle">t4</text>
-<text class="small" x="452.5" y="405.0" text-anchor="middle">manifest</text>
-<rect class="m1" x="519.5" y="280.1" width="22.0" height="91.9" rx="1.5"/>
-<rect class="m2" x="544.5" y="303.5" width="22.0" height="68.5" rx="1.5"/>
-<rect class="m3" x="569.5" y="172.6" width="22.0" height="199.4" rx="1.5"/>
-<text class="small" x="555.5" y="390.0" text-anchor="middle">t5</text>
-<text class="small" x="555.5" y="405.0" text-anchor="middle">newest-file</text>
-<rect class="m1" x="622.5" y="350.8" width="22.0" height="21.2" rx="1.5"/>
-<rect class="m2" x="647.5" y="300.0" width="22.0" height="72.0" rx="1.5"/>
-<rect class="m3" x="672.5" y="317.8" width="22.0" height="54.2" rx="1.5"/>
-<text class="small" x="658.5" y="390.0" text-anchor="middle">t6</text>
-<text class="small" x="658.5" y="405.0" text-anchor="middle">recover-miss.</text>
-<rect class="m1" x="725.5" y="301.5" width="22.0" height="70.5" rx="1.5"/>
-<rect class="m2" x="750.5" y="199.3" width="22.0" height="172.7" rx="1.5"/>
-<rect class="m3" x="775.5" y="294.9" width="22.0" height="77.1" rx="1.5"/>
-<text class="small" x="786.5" y="289.9" text-anchor="middle">F</text>
-<text class="small" x="761.5" y="390.0" text-anchor="middle">t7</text>
-<text class="small" x="761.5" y="405.0" text-anchor="middle">absent-capab.</text>
-<rect class="m1" x="828.5" y="328.5" width="22.0" height="43.5" rx="1.5"/>
-<text class="small" x="839.5" y="323.5" text-anchor="middle">F</text>
-<rect class="m2" x="853.5" y="131.6" width="22.0" height="240.4" rx="1.5"/>
-<text class="small" x="864.5" y="126.6" text-anchor="middle">F</text>
-<rect class="m3" x="878.5" y="266.9" width="22.0" height="105.1" rx="1.5"/>
-<text class="small" x="889.5" y="261.9" text-anchor="middle">F</text>
-<text class="small" x="864.5" y="390.0" text-anchor="middle">t8</text>
-<text class="small" x="864.5" y="405.0" text-anchor="middle">ambiguous</text>
-<rect class="m1" x="92.0" y="430.0" width="12.0" height="12.0" rx="2"/>
-<text class="small" x="110.0" y="440.0">Mode 1 - semantic injection</text>
-<rect class="m2" x="302.0" y="430.0" width="12.0" height="12.0" rx="2"/>
-<text class="small" x="320.0" y="440.0">Mode 2 - reactive discovery</text>
-<rect class="m3" x="512.0" y="430.0" width="12.0" height="12.0" rx="2"/>
-<text class="small" x="530.0" y="440.0">Mode 3 - inject-all baseline</text>
+<rect class="bg" width="940" height="444" rx="6"/>
+<text class="title" x="30.0" y="32.0">Tokens per task, against the inject-all baseline</text>
+<line class="grid" x1="92.0" y1="340.0" x2="916.0" y2="340.0"/><text class="axis" x="84.0" y="344.0" text-anchor="end">0</text><line class="grid" x1="92.0" y1="277.5" x2="916.0" y2="277.5"/><text class="axis" x="84.0" y="281.5" text-anchor="end">30,000</text><line class="grid" x1="92.0" y1="215.0" x2="916.0" y2="215.0"/><text class="axis" x="84.0" y="219.0" text-anchor="end">60,000</text><line class="grid" x1="92.0" y1="152.5" x2="916.0" y2="152.5"/><text class="axis" x="84.0" y="156.5" text-anchor="end">90,000</text><line class="grid" x1="92.0" y1="90.0" x2="916.0" y2="90.0"/><text class="axis" x="84.0" y="94.0" text-anchor="end">120,000</text>
+<line class="axisline" x1="92.0" y1="340.0" x2="916.0" y2="340.0"/>
+<text class="axis" x="30.0" y="80.0">tokens</text>
+<rect class="m1" x="107.5" y="203.5" width="22.0" height="136.5" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 122.0 195.5)" x="122.0" y="195.5">+85.9%</text>
+<rect class="m2" x="132.5" y="307.4" width="22.0" height="32.6" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 147.0 299.4)" x="147.0" y="299.4">−55.6%</text>
+<rect class="m3" x="157.5" y="266.5" width="22.0" height="73.5" rx="1.5"/>
+<text class="small" x="143.5" y="358.0" text-anchor="middle">t1</text>
+<text class="small" x="143.5" y="373.0" text-anchor="middle">read-count</text>
+<rect class="m1" x="210.5" y="309.4" width="22.0" height="30.6" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 225.0 301.4)" x="225.0" y="301.4">−42.3%</text>
+<rect class="m2" x="235.5" y="296.8" width="22.0" height="43.2" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 250.0 288.8)" x="250.0" y="288.8">−18.6%</text>
+<rect class="m3" x="260.5" y="286.9" width="22.0" height="53.1" rx="1.5"/>
+<text class="small" x="246.5" y="358.0" text-anchor="middle">t2</text>
+<text class="small" x="246.5" y="373.0" text-anchor="middle">file-size-di.</text>
+<rect class="m1" x="313.5" y="310.8" width="22.0" height="29.2" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 328.0 302.8)" x="328.0" y="302.8">−85.1%</text>
+<rect class="m2" x="338.5" y="297.0" width="22.0" height="43.0" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 353.0 289.0)" x="353.0" y="289.0">−78.0%</text>
+<rect class="m3" x="363.5" y="144.1" width="22.0" height="195.9" rx="1.5"/>
+<text class="small" x="374.5" y="140.1" text-anchor="middle">F</text>
+<text class="small" x="349.5" y="358.0" text-anchor="middle">t3</text>
+<text class="small" x="349.5" y="373.0" text-anchor="middle">csv-sum</text>
+<rect class="m1" x="416.5" y="287.8" width="22.0" height="52.2" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 431.0 279.8)" x="431.0" y="279.8">−29.9%</text>
+<rect class="m2" x="441.5" y="297.0" width="22.0" height="43.0" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 456.0 289.0)" x="456.0" y="289.0">−42.3%</text>
+<rect class="m3" x="466.5" y="265.6" width="22.0" height="74.4" rx="1.5"/>
+<text class="small" x="452.5" y="358.0" text-anchor="middle">t4</text>
+<text class="small" x="452.5" y="373.0" text-anchor="middle">manifest</text>
+<rect class="m1" x="519.5" y="256.7" width="22.0" height="83.3" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 534.0 248.7)" x="534.0" y="248.7">−53.9%</text>
+<rect class="m2" x="544.5" y="278.0" width="22.0" height="62.0" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 559.0 270.0)" x="559.0" y="270.0">−65.7%</text>
+<rect class="m3" x="569.5" y="159.3" width="22.0" height="180.7" rx="1.5"/>
+<text class="small" x="555.5" y="358.0" text-anchor="middle">t5</text>
+<text class="small" x="555.5" y="373.0" text-anchor="middle">newest-file</text>
+<rect class="m1" x="622.5" y="320.8" width="22.0" height="19.2" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 637.0 312.8)" x="637.0" y="312.8">−60.9%</text>
+<rect class="m2" x="647.5" y="274.7" width="22.0" height="65.3" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 662.0 266.7)" x="662.0" y="266.7">+33.0%</text>
+<rect class="m3" x="672.5" y="290.9" width="22.0" height="49.1" rx="1.5"/>
+<text class="small" x="658.5" y="358.0" text-anchor="middle">t6</text>
+<text class="small" x="658.5" y="373.0" text-anchor="middle">recover-miss.</text>
+<rect class="m1" x="725.5" y="276.1" width="22.0" height="63.9" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 740.0 268.1)" x="740.0" y="268.1">−8.5%</text>
+<rect class="m2" x="750.5" y="183.6" width="22.0" height="156.4" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 765.0 175.6)" x="765.0" y="175.6">+123.9%</text>
+<rect class="m3" x="775.5" y="270.2" width="22.0" height="69.8" rx="1.5"/>
+<text class="small" x="786.5" y="266.2" text-anchor="middle">F</text>
+<text class="small" x="761.5" y="358.0" text-anchor="middle">t7</text>
+<text class="small" x="761.5" y="373.0" text-anchor="middle">absent-capab.</text>
+<rect class="m1" x="828.5" y="300.6" width="22.0" height="39.4" rx="1.5"/>
+<text class="small" x="839.5" y="296.6" text-anchor="middle">F</text>
+<text class="goodsm" transform="rotate(-90 843.0 282.6)" x="843.0" y="282.6">−58.6%</text>
+<rect class="m2" x="853.5" y="122.2" width="22.0" height="217.8" rx="1.5"/>
+<text class="small" x="864.5" y="118.2" text-anchor="middle">F</text>
+<text class="badsm" transform="rotate(-90 868.0 104.2)" x="868.0" y="104.2">+128.7%</text>
+<rect class="m3" x="878.5" y="244.8" width="22.0" height="95.2" rx="1.5"/>
+<text class="small" x="889.5" y="240.8" text-anchor="middle">F</text>
+<text class="small" x="864.5" y="358.0" text-anchor="middle">t8</text>
+<text class="small" x="864.5" y="373.0" text-anchor="middle">ambiguous</text>
+<rect class="m1" x="92.0" y="404.0" width="12.0" height="12.0" rx="2"/>
+<text class="small" x="110.0" y="414.0">Mode 1 - semantic injection</text>
+<rect class="m2" x="302.0" y="404.0" width="12.0" height="12.0" rx="2"/>
+<text class="small" x="320.0" y="414.0">Mode 2 - reactive discovery</text>
+<rect class="m3" x="512.0" y="404.0" width="12.0" height="12.0" rx="2"/>
+<text class="small" x="530.0" y="414.0">Mode 3 - inject-all baseline</text>
+<text class="small" x="732.0" y="414.0">F = failed verification</text>
 </svg>
