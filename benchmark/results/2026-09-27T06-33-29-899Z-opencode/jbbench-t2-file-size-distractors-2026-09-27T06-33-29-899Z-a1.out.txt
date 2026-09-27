@@ -1,0 +1,16 @@
+exit=0 timedOut=false
+--- stdout ---
+2048 bytes is the size of data.bin, and this number has been written to size.txt.
+
+--- stderr ---
+[0m
+> build · nemotron-3-super
+[0m
+[0m$ [0mls -la
+total 640
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:04 .
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:04 ..
+-rw-r--r-- 1 RONIT 197121 2048 Sep 27 12:04 data.bin
+-rw-r--r-- 1 RONIT 197121 1303 Sep 27 12:04 opencode.json
+[0m
+[0m⚙ [0mbenchfs_write_file {"path":"size.txt","content":"2048"}

@@ -1,0 +1,14 @@
+exit=0 timedOut=false
+--- stdout ---
+The task is complete: found .txt files, created `out` folder, and wrote `manifest.txt` with sorted filenames.
+
+--- stderr ---
+[0m
+> build · nemotron-3-super
+[0m
+[0m✱ [0mGlob "**/*.txt"[90m 3 matches[0m
+[0m⚙ [0mbenchfs_create_directory {"path":"out"}
+[0m
+[0m← [0mWrite out/manifest.txt
+Wrote file successfully.
+[0m

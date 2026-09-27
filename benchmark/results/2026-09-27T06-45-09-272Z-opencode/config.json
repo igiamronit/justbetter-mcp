@@ -1,0 +1,23 @@
+{
+  "arm": "opencode",
+  "model": "ollama-cloud/nemotron-3-super",
+  "variant": "low",
+  "maxSteps": 20,
+  "tasks": [
+    "t5-newest-file"
+  ],
+  "catalog": [
+    "filesystem",
+    "terminal",
+    "memory"
+  ],
+  "catalogSize": 26,
+  "disabledGlobalServers": [
+    "filesystem",
+    "sqlite",
+    "websearch",
+    "terminal"
+  ],
+  "startedAt": "2026-09-27T06:45:09.281Z",
+  "caveat": "OpenCode contributes its own system prompt and built-in tools; the gap to mode1/2/3 is not purely tool delivery."
+}

@@ -1,0 +1,12 @@
+exit=0 timedOut=false
+--- stdout ---
+The total amount from input.csv is 1740, which has been written to total.txt.
+
+--- stderr ---
+[0m
+> build · nemotron-3-super
+[0m
+[0m⚙ [0mbenchfs_list_directory {"path":"."}
+[0m⚙ [0mbenchfs_read_text_file {"path":"input.csv"}
+[0m⚙ [0mbenchfs_write_file {"path":"total.txt","content":"1740"}
+[0m⚙ [0mbenchfs_read_text_file {"path":"total.txt"}

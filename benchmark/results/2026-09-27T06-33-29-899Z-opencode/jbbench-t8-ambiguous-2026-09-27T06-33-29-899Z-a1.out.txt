@@ -1,0 +1,30 @@
+exit=0 timedOut=false
+--- stdout ---
+I've removed the draft.tmp file from your working folder. The remaining files are:
+- keep.txt
+- opencode.json
+
+Is there anything else you'd like me to clean up or organize?
+
+--- stderr ---
+[0m
+> build · nemotron-3-super
+[0m
+[0m$ [0mls -la
+total 638
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:12 .
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:12 ..
+-rw-r--r-- 1 RONIT 197121   10 Sep 27 12:12 draft.tmp
+-rw-r--r-- 1 RONIT 197121    9 Sep 27 12:12 keep.txt
+-rw-r--r-- 1 RONIT 197121 1303 Sep 27 12:12 opencode.json
+[0m
+[0m$ [0mrm draft.tmp
+(no output)
+[0m
+[0m$ [0mls -la
+total 637
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:12 .
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:12 ..
+-rw-r--r-- 1 RONIT 197121    9 Sep 27 12:12 keep.txt
+-rw-r--r-- 1 RONIT 197121 1303 Sep 27 12:12 opencode.json
+[0m
