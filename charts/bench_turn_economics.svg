@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 346" width="880" height="346" role="img">
+<style>.bg { fill: #ffffff; }
+.title { font: 600 17px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.sub { font: 400 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.axis { font: 400 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.lbl { font: 600 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.arm { font: 700 16px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.arm4 { font: 700 16px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #8250df; }
+.tail4 { font: 400 11px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #8250df; }
+.val { font: 700 13px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.small { font: 400 10.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.grid { stroke: #d1d9e0; stroke-width: 1; }
+.axisline { stroke: #59636e; stroke-width: 1; }
+.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; } .m4 { fill: #8250df; }
+.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; } .m4c { fill: #d2b8ff; }
+.medmark { stroke: #1f2328; stroke-width: 2; stroke-dasharray: 3 2; }
+.good { font: 700 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
+.goodsm { font: 700 10px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
+.bad { font: 700 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #a40e26; }
+.badsm { font: 700 10px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #a40e26; }
+.base { font: 400 11px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+@media (prefers-color-scheme: dark) {
+  .bg { fill: #0d1117; }
+  .title, .lbl, .val, .arm { fill: #e6edf3; }
+  .arm4, .tail4 { fill: #a371f7; }
+  .sub, .axis, .small, .base { fill: #9198a1; }
+  .grid { stroke: #2f3742; }
+  .axisline { stroke: #9198a1; }
+  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; } .m4 { fill: #a371f7; }
+  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; } .m4c { fill: #432c7a; }
+  .medmark { stroke: #e6edf3; }
+  .good, .goodsm { fill: #3fb950; }
+  .bad, .badsm { fill: #ff7b72; }
+}</style>
+<rect class="bg" width="880" height="346" rx="6"/>
+<text class="title" x="56.0" y="34.0">What a turn costs, and how many turns it takes</text>
+<text class="lbl" x="257.0" y="68.0" text-anchor="middle">Tokens per turn</text>
+<line class="grid" x1="102.0" y1="284.0" x2="412.0" y2="284.0"/><text class="axis" x="94.0" y="288.0" text-anchor="end">0</text><line class="grid" x1="102.0" y1="238.0" x2="412.0" y2="238.0"/><text class="axis" x="94.0" y="242.0" text-anchor="end">5,000</text><line class="grid" x1="102.0" y1="192.0" x2="412.0" y2="192.0"/><text class="axis" x="94.0" y="196.0" text-anchor="end">10,000</text><line class="grid" x1="102.0" y1="146.0" x2="412.0" y2="146.0"/><text class="axis" x="94.0" y="150.0" text-anchor="end">15,000</text><line class="grid" x1="102.0" y1="100.0" x2="412.0" y2="100.0"/><text class="axis" x="94.0" y="104.0" text-anchor="end">20,000</text>
+<line class="axisline" x1="102.0" y1="284.0" x2="412.0" y2="284.0"/>
+<rect class="m1" x="111.3" y="242.2" width="54.0" height="41.8" rx="2"/>
+<text class="val" x="138.3" y="231.2" text-anchor="middle">4,542</text>
+<text class="good" x="138.3" y="214.2" text-anchor="middle">−25.9%</text>
+<text class="arm" x="138.3" y="310.0" text-anchor="middle">Mode 1</text>
+<rect class="m2" x="183.8" y="240.3" width="54.0" height="43.7" rx="2"/>
+<text class="val" x="210.8" y="229.3" text-anchor="middle">4,752</text>
+<text class="good" x="210.8" y="212.3" text-anchor="middle">−22.5%</text>
+<text class="arm" x="210.8" y="310.0" text-anchor="middle">Mode 2</text>
+<rect class="m3" x="256.3" y="227.6" width="54.0" height="56.4" rx="2"/>
+<text class="val" x="283.3" y="216.6" text-anchor="middle">6,129</text>
+<text class="base" x="283.3" y="199.6" text-anchor="middle">baseline</text>
+<text class="arm" x="283.3" y="310.0" text-anchor="middle">Mode 3</text>
+<line class="grid" x1="329.5" y1="96.0" x2="329.5" y2="298.0"/>
+<rect class="m4" x="348.8" y="143.3" width="54.0" height="140.7" rx="2"/>
+<text class="val" x="375.8" y="132.3" text-anchor="middle">15,297</text>
+<text class="bad" x="375.8" y="115.3" text-anchor="middle">+149.6%</text>
+<text class="arm4" x="375.8" y="310.0" text-anchor="middle">OpenCode</text>
+<text class="lbl" x="669.0" y="68.0" text-anchor="middle">Turns per run</text>
+<line class="grid" x1="514.0" y1="284.0" x2="824.0" y2="284.0"/><text class="axis" x="506.0" y="288.0" text-anchor="end">0.0</text><line class="grid" x1="514.0" y1="238.0" x2="824.0" y2="238.0"/><text class="axis" x="506.0" y="242.0" text-anchor="end">2.5</text><line class="grid" x1="514.0" y1="192.0" x2="824.0" y2="192.0"/><text class="axis" x="506.0" y="196.0" text-anchor="end">5.0</text><line class="grid" x1="514.0" y1="146.0" x2="824.0" y2="146.0"/><text class="axis" x="506.0" y="150.0" text-anchor="end">7.5</text><line class="grid" x1="514.0" y1="100.0" x2="824.0" y2="100.0"/><text class="axis" x="506.0" y="104.0" text-anchor="end">10.0</text>
+<line class="axisline" x1="514.0" y1="284.0" x2="824.0" y2="284.0"/>
+<rect class="m1" x="523.3" y="173.6" width="54.0" height="110.4" rx="2"/>
+<text class="val" x="550.3" y="162.6" text-anchor="middle">6.0</text>
+<text class="good" x="550.3" y="145.6" text-anchor="middle">−22.6%</text>
+<text class="arm" x="550.3" y="310.0" text-anchor="middle">Mode 1</text>
+<rect class="m2" x="595.8" y="129.9" width="54.0" height="154.1" rx="2"/>
+<text class="val" x="622.8" y="118.9" text-anchor="middle">8.4</text>
+<text class="bad" x="622.8" y="101.9" text-anchor="middle">+8.1%</text>
+<text class="arm" x="622.8" y="310.0" text-anchor="middle">Mode 2</text>
+<rect class="m3" x="668.3" y="141.4" width="54.0" height="142.6" rx="2"/>
+<text class="val" x="695.3" y="130.4" text-anchor="middle">7.8</text>
+<text class="base" x="695.3" y="113.4" text-anchor="middle">baseline</text>
+<text class="arm" x="695.3" y="310.0" text-anchor="middle">Mode 3</text>
+<line class="grid" x1="741.5" y1="96.0" x2="741.5" y2="298.0"/>
+<rect class="m4" x="760.8" y="178.2" width="54.0" height="105.8" rx="2"/>
+<text class="val" x="787.8" y="167.2" text-anchor="middle">5.8</text>
+<text class="good" x="787.8" y="150.2" text-anchor="middle">−25.8%</text>
+<text class="arm4" x="787.8" y="310.0" text-anchor="middle">OpenCode</text>
+</svg>

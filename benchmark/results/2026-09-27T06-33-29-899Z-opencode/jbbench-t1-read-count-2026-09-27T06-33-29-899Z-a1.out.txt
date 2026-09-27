@@ -1,0 +1,29 @@
+exit=0 timedOut=false
+--- stdout ---
+3
+
+--- stderr ---
+[0m
+> build · nemotron-3-super
+[0m
+[0m$ [0mls -la
+total 637
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:03 .
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:03 ..
+-rw-r--r-- 1 RONIT 197121   17 Sep 27 12:03 notes.txt
+-rw-r--r-- 1 RONIT 197121 1303 Sep 27 12:03 opencode.json
+[0m
+[0m$ [0mcat notes.txt
+alpha
+beta
+gamma
+[0m
+[0m$ [0mgrep -cv '^$' notes.txt
+3
+[0m
+[0m$ [0mgrep -cv '^$' notes.txt > count.txt
+(no output)
+[0m
+[0m$ [0mcat count.txt
+3
+[0m

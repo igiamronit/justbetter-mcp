@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 444" width="940" height="444" role="img">
+<style>.bg { fill: #ffffff; }
+.title { font: 600 17px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.sub { font: 400 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.axis { font: 400 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.lbl { font: 600 12.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.arm { font: 700 16px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.arm4 { font: 700 16px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #8250df; }
+.tail4 { font: 400 11px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #8250df; }
+.val { font: 700 13px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+.small { font: 400 10.5px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+.grid { stroke: #d1d9e0; stroke-width: 1; }
+.axisline { stroke: #59636e; stroke-width: 1; }
+.m1 { fill: #1f6feb; } .m2 { fill: #bf8700; } .m3 { fill: #cf222e; } .m4 { fill: #8250df; }
+.m1c { fill: #a5c9ff; } .m2c { fill: #e8c477; } .m3c { fill: #ffb3ba; } .m4c { fill: #d2b8ff; }
+.medmark { stroke: #1f2328; stroke-width: 2; stroke-dasharray: 3 2; }
+.good { font: 700 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
+.goodsm { font: 700 10px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #1a7f37; }
+.bad { font: 700 12px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #a40e26; }
+.badsm { font: 700 10px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #a40e26; }
+.base { font: 400 11px ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+@media (prefers-color-scheme: dark) {
+  .bg { fill: #0d1117; }
+  .title, .lbl, .val, .arm { fill: #e6edf3; }
+  .arm4, .tail4 { fill: #a371f7; }
+  .sub, .axis, .small, .base { fill: #9198a1; }
+  .grid { stroke: #2f3742; }
+  .axisline { stroke: #9198a1; }
+  .m1 { fill: #58a6ff; } .m2 { fill: #d29922; } .m3 { fill: #f85149; } .m4 { fill: #a371f7; }
+  .m1c { fill: #1f4e85; } .m2c { fill: #6b4c08; } .m3c { fill: #7d2622; } .m4c { fill: #432c7a; }
+  .medmark { stroke: #e6edf3; }
+  .good, .goodsm { fill: #3fb950; }
+  .bad, .badsm { fill: #ff7b72; }
+}</style>
+<rect class="bg" width="940" height="444" rx="6"/>
+<text class="title" x="30.0" y="32.0">Tokens per task, against the inject-all baseline</text>
+<line class="grid" x1="92.0" y1="340.0" x2="916.0" y2="340.0"/><text class="axis" x="84.0" y="344.0" text-anchor="end">0</text><line class="grid" x1="92.0" y1="277.5" x2="916.0" y2="277.5"/><text class="axis" x="84.0" y="281.5" text-anchor="end">100,000</text><line class="grid" x1="92.0" y1="215.0" x2="916.0" y2="215.0"/><text class="axis" x="84.0" y="219.0" text-anchor="end">200,000</text><line class="grid" x1="92.0" y1="152.5" x2="916.0" y2="152.5"/><text class="axis" x="84.0" y="156.5" text-anchor="end">300,000</text><line class="grid" x1="92.0" y1="90.0" x2="916.0" y2="90.0"/><text class="axis" x="84.0" y="94.0" text-anchor="end">400,000</text>
+<line class="axisline" x1="92.0" y1="340.0" x2="916.0" y2="340.0"/>
+<text class="axis" x="30.0" y="80.0">tokens</text>
+<rect class="m1" x="107.5" y="299.0" width="22.0" height="41.0" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 122.0 291.0)" x="122.0" y="291.0">+85.9%</text>
+<rect class="m2" x="132.5" y="330.2" width="22.0" height="9.8" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 147.0 322.2)" x="147.0" y="322.2">−55.6%</text>
+<rect class="m3" x="157.5" y="318.0" width="22.0" height="22.0" rx="1.5"/>
+<rect class="m4" x="182.5" y="288.8" width="22.0" height="51.2" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 197.0 280.8)" x="197.0" y="280.8">+132.3%</text>
+<text class="small" x="143.5" y="358.0" text-anchor="middle">t1</text>
+<text class="small" x="143.5" y="373.0" text-anchor="middle">read-count</text>
+<rect class="m1" x="210.5" y="330.8" width="22.0" height="9.2" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 225.0 322.8)" x="225.0" y="322.8">−42.3%</text>
+<rect class="m2" x="235.5" y="327.0" width="22.0" height="13.0" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 250.0 319.0)" x="250.0" y="319.0">−18.6%</text>
+<rect class="m3" x="260.5" y="324.1" width="22.0" height="15.9" rx="1.5"/>
+<rect class="m4" x="285.5" y="314.8" width="22.0" height="25.2" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 300.0 306.8)" x="300.0" y="306.8">+58.6%</text>
+<text class="small" x="246.5" y="358.0" text-anchor="middle">t2</text>
+<text class="small" x="246.5" y="373.0" text-anchor="middle">file-size-di.</text>
+<rect class="m1" x="313.5" y="331.3" width="22.0" height="8.7" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 328.0 323.3)" x="328.0" y="323.3">−85.1%</text>
+<rect class="m2" x="338.5" y="327.1" width="22.0" height="12.9" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 353.0 319.1)" x="353.0" y="319.1">−78.0%</text>
+<rect class="m3" x="363.5" y="281.2" width="22.0" height="58.8" rx="1.5"/>
+<text class="small" x="374.5" y="277.2" text-anchor="middle">F</text>
+<rect class="m4" x="388.5" y="297.9" width="22.0" height="42.1" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 403.0 289.9)" x="403.0" y="289.9">−28.4%</text>
+<text class="small" x="349.5" y="358.0" text-anchor="middle">t3</text>
+<text class="small" x="349.5" y="373.0" text-anchor="middle">csv-sum</text>
+<rect class="m1" x="416.5" y="324.4" width="22.0" height="15.6" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 431.0 316.4)" x="431.0" y="316.4">−29.9%</text>
+<rect class="m2" x="441.5" y="327.1" width="22.0" height="12.9" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 456.0 319.1)" x="456.0" y="319.1">−42.3%</text>
+<rect class="m3" x="466.5" y="317.7" width="22.0" height="22.3" rx="1.5"/>
+<rect class="m4" x="491.5" y="303.1" width="22.0" height="36.9" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 506.0 295.1)" x="506.0" y="295.1">+65.3%</text>
+<text class="small" x="452.5" y="358.0" text-anchor="middle">t4</text>
+<text class="small" x="452.5" y="373.0" text-anchor="middle">manifest</text>
+<rect class="m1" x="519.5" y="315.0" width="22.0" height="25.0" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 534.0 307.0)" x="534.0" y="307.0">−53.9%</text>
+<rect class="m2" x="544.5" y="321.4" width="22.0" height="18.6" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 559.0 313.4)" x="559.0" y="313.4">−65.7%</text>
+<rect class="m3" x="569.5" y="285.8" width="22.0" height="54.2" rx="1.5"/>
+<rect class="m4" x="594.5" y="314.7" width="22.0" height="25.3" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 609.0 306.7)" x="609.0" y="306.7">−53.4%</text>
+<text class="small" x="555.5" y="358.0" text-anchor="middle">t5</text>
+<text class="small" x="555.5" y="373.0" text-anchor="middle">newest-file</text>
+<rect class="m1" x="622.5" y="334.2" width="22.0" height="5.8" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 637.0 326.2)" x="637.0" y="326.2">−60.9%</text>
+<rect class="m2" x="647.5" y="320.4" width="22.0" height="19.6" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 662.0 312.4)" x="662.0" y="312.4">+33.0%</text>
+<rect class="m3" x="672.5" y="325.3" width="22.0" height="14.7" rx="1.5"/>
+<rect class="m4" x="697.5" y="311.7" width="22.0" height="28.3" rx="1.5"/>
+<text class="small" x="708.5" y="307.7" text-anchor="middle">F</text>
+<text class="badsm" transform="rotate(-90 712.0 293.7)" x="712.0" y="293.7">+92.3%</text>
+<text class="small" x="658.5" y="358.0" text-anchor="middle">t6</text>
+<text class="small" x="658.5" y="373.0" text-anchor="middle">recover-miss.</text>
+<rect class="m1" x="725.5" y="320.8" width="22.0" height="19.2" rx="1.5"/>
+<text class="goodsm" transform="rotate(-90 740.0 312.8)" x="740.0" y="312.8">−8.5%</text>
+<rect class="m2" x="750.5" y="293.1" width="22.0" height="46.9" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 765.0 285.1)" x="765.0" y="285.1">+123.9%</text>
+<rect class="m3" x="775.5" y="319.0" width="22.0" height="21.0" rx="1.5"/>
+<text class="small" x="786.5" y="315.0" text-anchor="middle">F</text>
+<rect class="m4" x="800.5" y="143.4" width="22.0" height="196.6" rx="1.5"/>
+<text class="small" x="811.5" y="139.4" text-anchor="middle">F</text>
+<text class="badsm" transform="rotate(-90 815.0 125.4)" x="815.0" y="125.4">+838.3%</text>
+<text class="small" x="761.5" y="358.0" text-anchor="middle">t7</text>
+<text class="small" x="761.5" y="373.0" text-anchor="middle">absent-capab.</text>
+<rect class="m1" x="828.5" y="328.2" width="22.0" height="11.8" rx="1.5"/>
+<text class="small" x="839.5" y="324.2" text-anchor="middle">F</text>
+<text class="goodsm" transform="rotate(-90 843.0 310.2)" x="843.0" y="310.2">−58.6%</text>
+<rect class="m2" x="853.5" y="274.7" width="22.0" height="65.3" rx="1.5"/>
+<text class="small" x="864.5" y="270.7" text-anchor="middle">F</text>
+<text class="badsm" transform="rotate(-90 868.0 256.7)" x="868.0" y="256.7">+128.7%</text>
+<rect class="m3" x="878.5" y="311.4" width="22.0" height="28.6" rx="1.5"/>
+<text class="small" x="889.5" y="307.4" text-anchor="middle">F</text>
+<rect class="m4" x="903.5" y="305.8" width="22.0" height="34.2" rx="1.5"/>
+<text class="badsm" transform="rotate(-90 918.0 297.8)" x="918.0" y="297.8">+19.7%</text>
+<text class="small" x="864.5" y="358.0" text-anchor="middle">t8</text>
+<text class="small" x="864.5" y="373.0" text-anchor="middle">ambiguous</text>
+<rect class="m1" x="92.0" y="404.0" width="12.0" height="12.0" rx="2"/>
+<text class="small" x="110.0" y="414.0">Mode 1 - semantic injection</text>
+<rect class="m2" x="297.0" y="404.0" width="12.0" height="12.0" rx="2"/>
+<text class="small" x="315.0" y="414.0">Mode 2 - reactive discovery</text>
+<rect class="m3" x="502.0" y="404.0" width="12.0" height="12.0" rx="2"/>
+<text class="small" x="520.0" y="414.0">Mode 3 - inject-all baseline</text>
+<rect class="m4" x="707.0" y="404.0" width="12.0" height="12.0" rx="2"/>
+<text class="tail4" x="725.0" y="414.0">OpenCode - unmodified</text>
+<text class="small" x="732.0" y="414.0">F = failed verification</text>
+</svg>

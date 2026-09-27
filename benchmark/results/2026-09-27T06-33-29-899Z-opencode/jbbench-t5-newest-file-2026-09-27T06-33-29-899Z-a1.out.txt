@@ -1,0 +1,30 @@
+exit=0 timedOut=false
+--- stdout ---
+The most recently modified file is opencode.json, and its name has been written to newest.txt.
+
+--- stderr ---
+[0m
+> build · nemotron-3-super
+[0m
+[0m$ [0mls -la
+total 640
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:05 .
+drwxr-xr-x 1 RONIT 197121    0 Sep 27 12:05 ..
+-rw-r--r-- 1 RONIT 197121    7 Sep 27 06:05 one.txt
+-rw-r--r-- 1 RONIT 197121 1303 Sep 27 12:05 opencode.json
+-rw-r--r-- 1 RONIT 197121    9 Sep 27 06:05 three.txt
+-rw-r--r-- 1 RONIT 197121    7 Sep 27 06:05 two.txt
+-rw-r--r-- 1 RONIT 197121    6 Sep 27 12:05 winner.txt
+[0m
+[0m$ [0mls -lt --full-time
+total 8
+-rw-r--r-- 1 RONIT 197121 1303 2026-09-27 12:05:47.031936300 +0530 opencode.json
+-rw-r--r-- 1 RONIT 197121    6 2026-09-27 12:05:47.031000000 +0530 winner.txt
+-rw-r--r-- 1 RONIT 197121    7 2026-09-27 06:05:47.029000000 +0530 one.txt
+-rw-r--r-- 1 RONIT 197121    9 2026-09-27 06:05:47.029000000 +0530 three.txt
+-rw-r--r-- 1 RONIT 197121    7 2026-09-27 06:05:47.029000000 +0530 two.txt
+[0m
+[0m← [0mWrite newest.txt
+Wrote file successfully.
+[0m
+[0m→ [0mRead newest.txt

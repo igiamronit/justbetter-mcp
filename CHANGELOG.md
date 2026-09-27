@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 This project uses [Semantic Versioning](https://semver.org/). While on `0.x`, the config
 format and CLI surface may change between minor versions.
 
+## [Unreleased]
+
+### Fixed
+
+- **The model was told to search for tools it had already been given.** The system prompt's tool
+  access section always carried "Capabilities listed below only by name are NOT yet loaded -- you
+  must call request_tools", followed by the list of capabilities that were *not* injected this
+  turn. When that list is empty -- always the case with `injectAllTools`, and true in Mode 1
+  whenever retrieval covered the whole catalog -- the instruction is simply false, and the model
+  obeyed it: measured behaviour on a trivial task was one `list_directory` followed by **nine
+  consecutive `request_tools` calls** for tools already in its array, 78,765 tokens, and a failed
+  task. The instruction is now issued only when something is genuinely undiscovered. On the same
+  task the cost fell to **33,205 tokens and the task passed** -- 58% cheaper and correct instead of
+  incorrect.
+
 ## [0.4.1] — 2026-09-26
 
 ### Fixed

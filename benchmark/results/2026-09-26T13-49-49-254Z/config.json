@@ -1,0 +1,16 @@
+{
+  "model": "nemotron-3-super",
+  "modelReported": "nemotron-3-super",
+  "reasoningEffort": "low",
+  "temperature": 0,
+  "band": "medium",
+  "servers": [
+    "filesystem",
+    "terminal",
+    "memory"
+  ],
+  "catalogSize": 2,
+  "budgetTokens": 1500000,
+  "stopReason": null,
+  "gitSha": "66cd5d8"
+}

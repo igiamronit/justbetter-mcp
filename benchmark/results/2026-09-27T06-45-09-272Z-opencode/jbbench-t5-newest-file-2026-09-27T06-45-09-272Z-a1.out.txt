@@ -1,0 +1,14 @@
+exit=0 timedOut=false
+--- stdout ---
+winner.txt is the most recently modified file, and its name has been written to newest.txt.
+
+--- stderr ---
+[0m
+> build · nemotron-3-super
+[0m
+[0m$ [0mnewest=$(find . -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-) && basename "$newest" > newest.txt
+(no output)
+[0m
+[0m$ [0mcat newest.txt
+winner.txt
+[0m

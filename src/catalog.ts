@@ -90,7 +90,8 @@ function tableColumns(table: string): Set<string> {
 // gateway had already handed to its model mid-conversation.
 {
   const sessionCols = tableColumns('session_state');
-  if (sessionCols.size > 0 && !sessionCols.has('session_id')) {
+  if (sessionCols.size > 0 && (!sessionCols.has('session_id') || !sessionCols.has('seq') || !sessionCols.has('requested'))) {
+    // Session state is per-process and cleared on startup anyway, so dropping it costs nothing.
     db.exec('DROP TABLE session_state');
   }
 }
@@ -100,6 +101,14 @@ db.exec(`
     session_id TEXT NOT NULL,
     tool_name TEXT NOT NULL,
     injected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    -- CURRENT_TIMESTAMP only resolves to the second, so every tool injected in one turn shared a
+    -- timestamp and the carry-over query fell through to its alphabetical tiebreak. A monotonic
+    -- counter gives the "most recent first" the query always claimed to use.
+    seq INTEGER NOT NULL DEFAULT 0,
+    -- 1 when the model explicitly asked for this tool through request_tools. Those have to
+    -- outrank tools the proxy merely happened to inject, or the thing the model went looking for
+    -- is the thing that gets evicted.
+    requested INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, tool_name)
   );
 `);
@@ -389,14 +398,31 @@ export function clearQuarantine(toolName: string, serverName?: string): { approv
 // ============================================================================
 
 const markInjectedStmt = db.prepare(`
-  INSERT INTO session_state (session_id, tool_name, injected_at)
-  VALUES (?, ?, CURRENT_TIMESTAMP)
+  INSERT INTO session_state (session_id, tool_name, injected_at, seq, requested)
+  VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)
   ON CONFLICT(session_id, tool_name) DO UPDATE SET
-    injected_at = CURRENT_TIMESTAMP
+    injected_at = CURRENT_TIMESTAMP,
+    seq = excluded.seq,
+    -- Sticky: once the model has asked for a tool, it keeps its priority for the session. A later
+    -- routine injection must not quietly demote it back into the evictable pool.
+    requested = MAX(session_state.requested, excluded.requested)
 `);
 
-export function markToolInjected(toolName: string) {
-  markInjectedStmt.run(SESSION_ID, toolName);
+/** Monotonic, so ordering by it is true insertion order regardless of clock resolution. */
+let injectionSeq = 0;
+
+/**
+ * Records that a tool is available to the model this turn.
+ *
+ * `requested` marks the tools the model explicitly went looking for through request_tools. Without
+ * that distinction the proxy's own per-turn injections -- fifteen or more of them, all marked with
+ * the same one-second timestamp -- filled the whole carry-over window, and the query's alphabetical
+ * tiebreak decided what survived. Among the filesystem tools `write_file` sorts last, so it was
+ * evicted every single time: the model would discover it, lose it, and rediscover it. Measured on
+ * one task, that cost ten consecutive request_tools calls and about 150k tokens.
+ */
+export function markToolInjected(toolName: string, options: { requested?: boolean } = {}) {
+  markInjectedStmt.run(SESSION_ID, toolName, ++injectionSeq, options.requested ? 1 : 0);
 }
 
 const checkInjectedStmt = db.prepare(`
@@ -429,7 +455,8 @@ export function getRecentlyInjectedTools(excluded: string[] = [], limit: number 
       AND s.injected_at >= datetime('now', '-${CARRY_OVER_WINDOW_MINUTES} minutes')
       AND t.is_quarantined = 0
       ${excludeClause}
-    ORDER BY s.injected_at DESC, t.tool_name ASC
+    -- What the model asked for first, then genuinely most recent, then a stable tiebreak.
+    ORDER BY s.requested DESC, s.seq DESC, t.tool_name ASC
     LIMIT ?
   `).all(SESSION_ID, ...excluded, limit);
 }
